@@ -1,3 +1,4 @@
+
 name: Deploy Application to EKS - Dev
 
 on:
@@ -81,12 +82,25 @@ jobs:
             --dry-run=client -o yaml | kubectl apply -f -
 
       - name: Configure Docker Hub Pull Secret
+        env:
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          DOCKER_TOKEN: ${{ secrets.DOCKER_TOKEN }}
         run: |
+          test -n "$DOCKER_USERNAME" || {
+            echo "Docker Hub username is missing"
+            exit 1
+          }
+
+          test -n "$DOCKER_TOKEN" || {
+            echo "Docker Hub token is missing"
+            exit 1
+          }
+
           kubectl create secret docker-registry dockerhub-secret \
             --namespace app-dev \
             --docker-server=https://index.docker.io/v1/ \
             --docker-username="$DOCKER_USERNAME" \
-            --docker-password="${{ secrets.DOCKER_TOKEN }}" \
+            --docker-password="$DOCKER_TOKEN" \
             --dry-run=client -o yaml | kubectl apply -f -
 
       - name: Validate Helm Chart
@@ -98,11 +112,11 @@ jobs:
           helm upgrade --install employee-app ./dev-chart \
             --namespace app-dev \
             --create-namespace \
-            --set frontend.image.repository="$DOCKER_USERNAME/app3-frontend" \
+            --set frontend.image.repository="$DOCKERHUB_USERNAME/employee-frontend" \
             --set frontend.image.tag="$IMAGE_TAG" \
-            --set backend.image.repository="$DOCKER_USERNAME/app3-backend" \
+            --set backend.image.repository="$DOCKERHUB_USERNAME/employee-backend" \
             --set backend.image.tag="$IMAGE_TAG" \
-            --set db.image.repository="$DOCKER_USERNAME/app3-db" \
+            --set db.image.repository="$DOCKERHUB_USERNAME/employee-db" \
             --set db.image.tag="$IMAGE_TAG" \
             --wait \
             --timeout 5m
