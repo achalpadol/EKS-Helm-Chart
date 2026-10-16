@@ -59,21 +59,21 @@ jobs:
         with:
           context: ./frontend
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/app3-frontend:${{ github.sha }}
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/employee-frontend:${{ github.sha }}
 
       - name: Build and Push Backend Image
         uses: docker/build-push-action@v6
         with:
           context: ./backend
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/app3-backend:${{ github.sha }}
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/employee-backend:${{ github.sha }}
 
       - name: Build and Push Database Image
         uses: docker/build-push-action@v6
         with:
           context: ./db
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/app3-db:${{ github.sha }}
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/employee-db:${{ github.sha }}
 
       - name: Create Dev Namespace
         run: |
