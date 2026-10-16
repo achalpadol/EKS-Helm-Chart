@@ -10,7 +10,7 @@ on:
       - "backend/**"
       - "db/**"
       - "dev-chart/**"
-      - ".github/workflows/eks-app-deploy.yml"
+      - ".github/workflows/eks-deploy.yml"
 
   workflow_dispatch:
     inputs:
