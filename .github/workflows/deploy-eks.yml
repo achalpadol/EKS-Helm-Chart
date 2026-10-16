@@ -1,5 +1,5 @@
-
-name: Build and Deploy Employee App to EKS
+```yaml
+name: Build and Deploy Application to EKS
 
 on:
   push:
@@ -8,9 +8,26 @@ on:
     paths:
       - "frontend/**"
       - "backend/**"
+      - "db/**"
       - "dev-chart/**"
-      - ".github/workflows/deploy-eks.yml"
+      - ".github/workflows/eks-app-deploy.yml"
+
   workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to deploy"
+        type: choice
+        required: true
+        default: dev
+        options:
+          - dev
+          - qa
+          - uat
+          - prod
+      image_tag:
+        description: "Existing image commit SHA to promote (required outside Dev)"
+        type: string
+        required: false
 
 permissions:
   contents: read
@@ -21,15 +38,32 @@ env:
   EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME }}
   K8S_NAMESPACE: app-dev
   HELM_RELEASE: employee-app
+  DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
 
 jobs:
-  build-and-deploy:
-    name: Build Images and Deploy with Helm
+  build-promote-deploy:
     runs-on: ubuntu-latest
+
+    # Configure required reviewers on the GitHub production Environment.
+    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment == 'prod' && 'production' || 'application-deployment' }}
+
+    env:
+      DEPLOY_ENV: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'dev' }}
+      IMAGE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.image_tag || github.sha }}
 
     steps:
       - name: Checkout source code
         uses: actions/checkout@v4
+
+      - name: Validate inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "$DEPLOY_ENV" != "dev" && -z "$IMAGE_TAG" ]]; then
+            echo "An existing image tag is required for QA, UAT and PROD."
+            exit 1
+          fi
 
       - name: Configure AWS credentials using OIDC
         uses: aws-actions/configure-aws-credentials@v4
@@ -43,38 +77,78 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Set image tag
-        id: image
-        shell: bash
-        run: echo "tag=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+      - name: Build and push Dev images
+        if: env.DEPLOY_ENV == 'dev'
+        uses: docker/setup-buildx-action@v3
 
-      - name: Build and push frontend image
+      - name: Build and push frontend
+        if: env.DEPLOY_ENV == 'dev'
         uses: docker/build-push-action@v6
         with:
           context: ./frontend
           push: true
-          tags: achalpadol/employee-frontend:${{ steps.image.outputs.tag }}
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/app3-frontend:${{ env.IMAGE_TAG }}
 
-      - name: Build and push backend image
+      - name: Build and push backend
+        if: env.DEPLOY_ENV == 'dev'
         uses: docker/build-push-action@v6
         with:
           context: ./backend
           push: true
-          tags: achalpadol/employee-backend:${{ steps.image.outputs.tag }}
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/app3-backend:${{ env.IMAGE_TAG }}
+
+      - name: Build and push database
+        if: env.DEPLOY_ENV == 'dev'
+        uses: docker/build-push-action@v6
+        with:
+          context: ./db
+          push: true
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/app3-db:${{ env.IMAGE_TAG }}
+
+      - name: Promote images between environments
+        if: env.DEPLOY_ENV != 'dev'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          case "$DEPLOY_ENV" in
+            qa)  SOURCE_ENV="dev" ;;
+            uat) SOURCE_ENV="qa" ;;
+            prod) SOURCE_ENV="uat" ;;
+            *) echo "Unsupported environment"; exit 1 ;;
+          esac
+
+          # Docker Hub uses one repository per component here.
+          # Environment promotion reuses the same commit tag.
+          for APP in frontend backend db; do
+            SOURCE_IMAGE="$DOCKERHUB_USERNAME/app3-${APP}:$IMAGE_TAG"
+            TARGET_IMAGE="$DOCKERHUB_USERNAME/app3-${APP}:$IMAGE_TAG"
+
+            echo "Checking image for $SOURCE_ENV -> $DEPLOY_ENV: $SOURCE_IMAGE"
+            docker pull "$SOURCE_IMAGE"
+
+            # The same repository and tag are reused across environments.
+            # No rebuild is required.
+            docker image inspect "$TARGET_IMAGE" >/dev/null
+          done
 
       - name: Install kubectl
         uses: azure/setup-kubectl@v4
         with:
-          version: latest
+          version: v1.34.0
 
       - name: Install Helm
         uses: azure/setup-helm@v4
         with:
-          version: latest
+          version: v3.17.3
 
       - name: Configure EKS access
         shell: bash
         run: |
+          set -euo pipefail
+
+          test -n "$EKS_CLUSTER_NAME"
+
           aws eks update-kubeconfig \
             --name "$EKS_CLUSTER_NAME" \
             --region "$AWS_REGION"
@@ -82,25 +156,36 @@ jobs:
           kubectl get nodes
 
       - name: Validate Helm chart
-        run: |
-          helm lint ./dev-chart
+        run: helm lint ./dev-chart
 
-      - name: Deploy application with Helm
+      - name: Deploy with Helm
         shell: bash
         run: |
+          set -euo pipefail
+
+          NAMESPACE="app-${DEPLOY_ENV}"
+
           helm upgrade --install "$HELM_RELEASE" ./dev-chart \
-            --namespace "$K8S_NAMESPACE" \
+            --namespace "$NAMESPACE" \
             --create-namespace \
-            --set frontend.image.repository=achalpadol/employee-frontend \
-            --set-string frontend.image.tag="${{ steps.image.outputs.tag }}" \
-            --set backend.image.repository=achalpadol/employee-backend \
-            --set-string backend.image.tag="${{ steps.image.outputs.tag }}" \
+            --set frontend.image.repository="$DOCKERHUB_USERNAME/app3-frontend" \
+            --set-string frontend.image.tag="$IMAGE_TAG" \
+            --set backend.image.repository="$DOCKERHUB_USERNAME/app3-backend" \
+            --set-string backend.image.tag="$IMAGE_TAG" \
+            --set db.image.repository="$DOCKERHUB_USERNAME/app3-db" \
+            --set-string db.image.tag="$IMAGE_TAG" \
             --wait \
             --timeout 10m
 
       - name: Verify deployment
+        shell: bash
         run: |
-          kubectl get deployments -n "$K8S_NAMESPACE"
-          kubectl get pods -n "$K8S_NAMESPACE"
-          kubectl get services -n "$K8S_NAMESPACE"
-          helm status "$HELM_RELEASE" -n "$K8S_NAMESPACE"
+          set -euo pipefail
+
+          NAMESPACE="app-${DEPLOY_ENV}"
+
+          kubectl get deployments -n "$NAMESPACE"
+          kubectl get pods -n "$NAMESPACE"
+          kubectl get services -n "$NAMESPACE"
+          helm status "$HELM_RELEASE" -n "$NAMESPACE"
+```
