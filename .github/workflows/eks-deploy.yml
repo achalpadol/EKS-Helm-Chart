@@ -25,8 +25,18 @@ on:
           - uat
           - prod
 
-      image_tag:
-        description: "Existing DEV image SHA for QA/UAT/PROD"
+      frontend_tag:
+        description: "Existing DEV frontend image tag (Git SHA)"
+        type: string
+        required: false
+
+      backend_tag:
+        description: "Existing DEV backend image tag (Git SHA)"
+        type: string
+        required: false
+
+      db_tag:
+        description: "Existing DEV database image tag (Git SHA)"
         type: string
         required: false
 
@@ -46,14 +56,12 @@ env:
 jobs:
   deploy:
     name: Build or Promote - ${{ github.event_name == 'push' && 'dev' || inputs.environment }}
-
     runs-on: ubuntu-latest
 
     environment: ${{ github.event_name == 'push' && 'development' || inputs.environment == 'dev' && 'development' || inputs.environment == 'prod' && 'production' || inputs.environment }}
 
     env:
       TARGET_ENV: ${{ github.event_name == 'push' && 'dev' || inputs.environment }}
-      IMAGE_TAG: ${{ github.event_name == 'push' && github.sha || inputs.environment == 'dev' && github.sha || inputs.image_tag }}
 
     steps:
       - name: Checkout repository
@@ -61,23 +69,39 @@ jobs:
 
       - name: Validate inputs
         shell: bash
+        env:
+          FRONTEND_TAG: ${{ inputs.frontend_tag }}
+          BACKEND_TAG: ${{ inputs.backend_tag }}
+          DB_TAG: ${{ inputs.db_tag }}
         run: |
           set -euo pipefail
 
           case "$TARGET_ENV" in
             dev|qa|uat|prod) ;;
-            *) echo "Invalid environment"; exit 1 ;;
+            *)
+              echo "Invalid target environment."
+              exit 1
+              ;;
           esac
 
-          if [[ -z "$IMAGE_TAG" ]]; then
-            echo "An image tag is required."
-            exit 1
+          if [[ "$TARGET_ENV" == "dev" ]]; then
+            echo "Dev will build images using commit: $GITHUB_SHA"
+            exit 0
           fi
 
-          if [[ "$TARGET_ENV" != "dev" && "$IMAGE_TAG" == "$GITHUB_SHA" ]]; then
-            echo "For QA/UAT/Prod, enter the SHA of the existing DEV image."
-            exit 1
-          fi
+          for tag in "$FRONTEND_TAG" "$BACKEND_TAG" "$DB_TAG"; do
+            if [[ -z "$tag" ]]; then
+              echo "All three image tags are required for QA/UAT/Prod."
+              exit 1
+            fi
+
+            if [[ ! "$tag" =~ ^[a-fA-F0-9]{7,64}$ ]]; then
+              echo "Image tags must be Git commit SHAs (7-64 hex characters)."
+              exit 1
+            fi
+          done
+
+          echo "All promotion inputs are valid."
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -101,7 +125,7 @@ jobs:
         if: ${{ github.event_name == 'push' || inputs.environment == 'dev' }}
         uses: docker/setup-buildx-action@v3
 
-      # Build images only for Dev.
+      # Build all three images only in Dev.
       - name: Build and push frontend
         if: ${{ github.event_name == 'push' || inputs.environment == 'dev' }}
         uses: docker/build-push-action@v6
@@ -126,21 +150,40 @@ jobs:
           push: true
           tags: ${{ secrets.DOCKER_USERNAME }}/employee-db:${{ github.sha }}
 
-      - name: Verify images exist
+      - name: Select image tags
+        shell: bash
+        env:
+          FRONTEND_INPUT: ${{ inputs.frontend_tag }}
+          BACKEND_INPUT: ${{ inputs.backend_tag }}
+          DB_INPUT: ${{ inputs.db_tag }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$TARGET_ENV" == "dev" ]]; then
+            echo "FRONTEND_TAG=$GITHUB_SHA" >> "$GITHUB_ENV"
+            echo "BACKEND_TAG=$GITHUB_SHA" >> "$GITHUB_ENV"
+            echo "DB_TAG=$GITHUB_SHA" >> "$GITHUB_ENV"
+          else
+            echo "FRONTEND_TAG=$FRONTEND_INPUT" >> "$GITHUB_ENV"
+            echo "BACKEND_TAG=$BACKEND_INPUT" >> "$GITHUB_ENV"
+            echo "DB_TAG=$DB_INPUT" >> "$GITHUB_ENV"
+          fi
+
+      - name: Verify selected images exist
         shell: bash
         run: |
           set -euo pipefail
 
           docker manifest inspect \
-            "$DOCKER_USERNAME/employee-frontend:$IMAGE_TAG" >/dev/null
+            "$DOCKER_USERNAME/employee-frontend:$FRONTEND_TAG" >/dev/null
 
           docker manifest inspect \
-            "$DOCKER_USERNAME/employee-backend:$IMAGE_TAG" >/dev/null
+            "$DOCKER_USERNAME/employee-backend:$BACKEND_TAG" >/dev/null
 
           docker manifest inspect \
-            "$DOCKER_USERNAME/employee-db:$IMAGE_TAG" >/dev/null
+            "$DOCKER_USERNAME/employee-db:$DB_TAG" >/dev/null
 
-          echo "Verified images with tag: $IMAGE_TAG"
+          echo "Verified all three selected images."
 
       - name: Create target namespace
         run: |
@@ -168,23 +211,25 @@ jobs:
       - name: Validate Helm chart
         run: helm lint ./dev-chart
 
-      - name: Deploy application
+      - name: Deploy application with Helm
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Environment: $TARGET_ENV"
-          echo "Image tag: $IMAGE_TAG"
+          echo "Target environment: $TARGET_ENV"
+          echo "Frontend tag: $FRONTEND_TAG"
+          echo "Backend tag: $BACKEND_TAG"
+          echo "Database tag: $DB_TAG"
 
           helm upgrade --install employee-app ./dev-chart \
             --namespace "app-${TARGET_ENV}" \
             --create-namespace \
             --set-string frontend.image.repository="$DOCKER_USERNAME/employee-frontend" \
-            --set-string frontend.image.tag="$IMAGE_TAG" \
+            --set-string frontend.image.tag="$FRONTEND_TAG" \
             --set-string backend.image.repository="$DOCKER_USERNAME/employee-backend" \
-            --set-string backend.image.tag="$IMAGE_TAG" \
+            --set-string backend.image.tag="$BACKEND_TAG" \
             --set-string db.image.repository="$DOCKER_USERNAME/employee-db" \
-            --set-string db.image.tag="$IMAGE_TAG" \
+            --set-string db.image.tag="$DB_TAG" \
             --wait \
             --timeout 10m
 
@@ -194,5 +239,6 @@ jobs:
           kubectl get deployments,pods,services \
             -n "app-${TARGET_ENV}" || true
 
-          kubectl get events -n "app-${TARGET_ENV}" \
+          kubectl get events \
+            -n "app-${TARGET_ENV}" \
             --sort-by=.metadata.creationTimestamp | tail -n 30 || true
