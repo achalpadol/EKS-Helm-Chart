@@ -1,5 +1,4 @@
-
-name: Build and Deploy Application to EKS
+name: Deploy Application to EKS - Dev
 
 on:
   push:
@@ -10,24 +9,9 @@ on:
       - "backend/**"
       - "db/**"
       - "dev-chart/**"
-      - ".github/workflows/eks-deploy.yml"
+      - ".github/workflows/eks-dev-deploy.yml"
 
   workflow_dispatch:
-    inputs:
-      environment:
-        description: "Environment to deploy"
-        type: choice
-        required: true
-        default: dev
-        options:
-          - dev
-          - qa
-          - uat
-          - prod
-      image_tag:
-        description: "Existing image commit SHA to promote (required outside Dev)"
-        type: string
-        required: false
 
 permissions:
   contents: read
@@ -36,40 +20,30 @@ permissions:
 env:
   AWS_REGION: ap-south-1
   EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME }}
-  K8S_NAMESPACE: app-dev
-  HELM_RELEASE: employee-app
   DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+  IMAGE_TAG: ${{ github.sha }}
 
 jobs:
-  build-promote-deploy:
+  build-and-deploy:
+    name: Build, Push and Deploy Dev
     runs-on: ubuntu-latest
-
-    # Configure required reviewers on the GitHub production Environment.
-    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment == 'prod' && 'production' || 'application-deployment' }}
-
-    env:
-      DEPLOY_ENV: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'dev' }}
-      IMAGE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.image_tag || github.sha }}
+    environment: development
 
     steps:
-      - name: Checkout source code
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Validate inputs
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if [[ "$DEPLOY_ENV" != "dev" && -z "$IMAGE_TAG" ]]; then
-            echo "An existing image tag is required for QA, UAT and PROD."
-            exit 1
-          fi
-
-      - name: Configure AWS credentials using OIDC
+      - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --region "$AWS_REGION" \
+            --name "$EKS_CLUSTER_NAME"
 
       - name: Login to Docker Hub
         uses: docker/login-action@v3
@@ -77,114 +51,64 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build and push Dev images
-        if: env.DEPLOY_ENV == 'dev'
+      - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build and push frontend
-        if: env.DEPLOY_ENV == 'dev'
+      - name: Build and Push Frontend Image
         uses: docker/build-push-action@v6
         with:
           context: ./frontend
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/app3-frontend:${{ env.IMAGE_TAG }}
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/app3-frontend:${{ github.sha }}
 
-      - name: Build and push backend
-        if: env.DEPLOY_ENV == 'dev'
+      - name: Build and Push Backend Image
         uses: docker/build-push-action@v6
         with:
           context: ./backend
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/app3-backend:${{ env.IMAGE_TAG }}
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/app3-backend:${{ github.sha }}
 
-      - name: Build and push database
-        if: env.DEPLOY_ENV == 'dev'
+      - name: Build and Push Database Image
         uses: docker/build-push-action@v6
         with:
           context: ./db
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/app3-db:${{ env.IMAGE_TAG }}
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/app3-db:${{ github.sha }}
 
-      - name: Promote images between environments
-        if: env.DEPLOY_ENV != 'dev'
-        shell: bash
+      - name: Create Dev Namespace
         run: |
-          set -euo pipefail
+          kubectl create namespace app-dev \
+            --dry-run=client -o yaml | kubectl apply -f -
 
-          case "$DEPLOY_ENV" in
-            qa)  SOURCE_ENV="dev" ;;
-            uat) SOURCE_ENV="qa" ;;
-            prod) SOURCE_ENV="uat" ;;
-            *) echo "Unsupported environment"; exit 1 ;;
-          esac
-
-          # Docker Hub uses one repository per component here.
-          # Environment promotion reuses the same commit tag.
-          for APP in frontend backend db; do
-            SOURCE_IMAGE="$DOCKERHUB_USERNAME/app3-${APP}:$IMAGE_TAG"
-            TARGET_IMAGE="$DOCKERHUB_USERNAME/app3-${APP}:$IMAGE_TAG"
-
-            echo "Checking image for $SOURCE_ENV -> $DEPLOY_ENV: $SOURCE_IMAGE"
-            docker pull "$SOURCE_IMAGE"
-
-            # The same repository and tag are reused across environments.
-            # No rebuild is required.
-            docker image inspect "$TARGET_IMAGE" >/dev/null
-          done
-
-      - name: Install kubectl
-        uses: azure/setup-kubectl@v4
-        with:
-          version: v1.34.0
-
-      - name: Install Helm
-        uses: azure/setup-helm@v4
-        with:
-          version: v3.17.3
-
-      - name: Configure EKS access
-        shell: bash
+      - name: Configure Docker Hub Pull Secret
         run: |
-          set -euo pipefail
+          kubectl create secret docker-registry dockerhub-secret \
+            --namespace app-dev \
+            --docker-server=https://index.docker.io/v1/ \
+            --docker-username="$DOCKERHUB_USERNAME" \
+            --docker-password="${{ secrets.DOCKERHUB_TOKEN }}" \
+            --dry-run=client -o yaml | kubectl apply -f -
 
-          test -n "$EKS_CLUSTER_NAME"
-
-          aws eks update-kubeconfig \
-            --name "$EKS_CLUSTER_NAME" \
-            --region "$AWS_REGION"
-
-          kubectl get nodes
-
-      - name: Validate Helm chart
-        run: helm lint ./dev-chart
-
-      - name: Deploy with Helm
-        shell: bash
+      - name: Validate Helm Chart
         run: |
-          set -euo pipefail
+          helm lint ./dev-chart
 
-          NAMESPACE="app-${DEPLOY_ENV}"
-
-          helm upgrade --install "$HELM_RELEASE" ./dev-chart \
-            --namespace "$NAMESPACE" \
+      - name: Deploy Application to Dev
+        run: |
+          helm upgrade --install employee-app ./dev-chart \
+            --namespace app-dev \
             --create-namespace \
             --set frontend.image.repository="$DOCKERHUB_USERNAME/app3-frontend" \
-            --set-string frontend.image.tag="$IMAGE_TAG" \
+            --set frontend.image.tag="$IMAGE_TAG" \
             --set backend.image.repository="$DOCKERHUB_USERNAME/app3-backend" \
-            --set-string backend.image.tag="$IMAGE_TAG" \
+            --set backend.image.tag="$IMAGE_TAG" \
             --set db.image.repository="$DOCKERHUB_USERNAME/app3-db" \
-            --set-string db.image.tag="$IMAGE_TAG" \
+            --set db.image.tag="$IMAGE_TAG" \
             --wait \
-            --timeout 10m
+            --timeout 5m
 
-      - name: Verify deployment
-        shell: bash
+      - name: Verify Deployment
         run: |
-          set -euo pipefail
-
-          NAMESPACE="app-${DEPLOY_ENV}"
-
-          kubectl get deployments -n "$NAMESPACE"
-          kubectl get pods -n "$NAMESPACE"
-          kubectl get services -n "$NAMESPACE"
-          helm status "$HELM_RELEASE" -n "$NAMESPACE"
+          kubectl get deployments -n app-dev
+          kubectl get pods -n app-dev
+          kubectl get services -n app-dev
