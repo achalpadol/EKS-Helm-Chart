@@ -1,4 +1,4 @@
-```yaml
+
 name: Build and Deploy Application to EKS
 
 on:
@@ -188,4 +188,3 @@ jobs:
           kubectl get pods -n "$NAMESPACE"
           kubectl get services -n "$NAMESPACE"
           helm status "$HELM_RELEASE" -n "$NAMESPACE"
-```
