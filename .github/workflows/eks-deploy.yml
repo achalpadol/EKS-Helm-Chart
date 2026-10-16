@@ -19,7 +19,7 @@ permissions:
 
 env:
   AWS_REGION: ap-south-1
-  EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME }}
+  EKS_CLUSTER_NAME: dev-eks-cluster
   DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
   IMAGE_TAG: ${{ github.sha }}
 
