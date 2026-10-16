@@ -20,7 +20,7 @@ permissions:
 env:
   AWS_REGION: ap-south-1
   EKS_CLUSTER_NAME: dev-eks-cluster
-  DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+  DOCKERHUB_USERNAME: ${{ secrets.DOCKER_USERNAME }}
   IMAGE_TAG: ${{ github.sha }}
 
 jobs:
@@ -48,8 +48,8 @@ jobs:
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_TOKEN }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -59,21 +59,21 @@ jobs:
         with:
           context: ./frontend
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/employee-frontend:${{ github.sha }}
+          tags: ${{ secrets.DOCKER_USERNAME }}/employee-frontend:${{ github.sha }}
 
       - name: Build and Push Backend Image
         uses: docker/build-push-action@v6
         with:
           context: ./backend
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/employee-backend:${{ github.sha }}
+          tags: ${{ secrets.DOCKER_USERNAME }}/employee-backend:${{ github.sha }}
 
       - name: Build and Push Database Image
         uses: docker/build-push-action@v6
         with:
           context: ./db
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/employee-db:${{ github.sha }}
+          tags: ${{ secrets.DOCKER_USERNAME }}/employee-db:${{ github.sha }}
 
       - name: Create Dev Namespace
         run: |
@@ -85,8 +85,8 @@ jobs:
           kubectl create secret docker-registry dockerhub-secret \
             --namespace app-dev \
             --docker-server=https://index.docker.io/v1/ \
-            --docker-username="$DOCKERHUB_USERNAME" \
-            --docker-password="${{ secrets.DOCKERHUB_TOKEN }}" \
+            --docker-username="$DOCKER_USERNAME" \
+            --docker-password="${{ secrets.DOCKER_TOKEN }}" \
             --dry-run=client -o yaml | kubectl apply -f -
 
       - name: Validate Helm Chart
@@ -98,11 +98,11 @@ jobs:
           helm upgrade --install employee-app ./dev-chart \
             --namespace app-dev \
             --create-namespace \
-            --set frontend.image.repository="$DOCKERHUB_USERNAME/app3-frontend" \
+            --set frontend.image.repository="$DOCKER_USERNAME/app3-frontend" \
             --set frontend.image.tag="$IMAGE_TAG" \
-            --set backend.image.repository="$DOCKERHUB_USERNAME/app3-backend" \
+            --set backend.image.repository="$DOCKER_USERNAME/app3-backend" \
             --set backend.image.tag="$IMAGE_TAG" \
-            --set db.image.repository="$DOCKERHUB_USERNAME/app3-db" \
+            --set db.image.repository="$DOCKER_USERNAME/app3-db" \
             --set db.image.tag="$IMAGE_TAG" \
             --wait \
             --timeout 5m
