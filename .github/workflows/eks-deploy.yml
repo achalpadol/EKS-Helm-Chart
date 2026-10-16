@@ -1,5 +1,5 @@
 
-name: Deploy Application to EKS - Dev
+name: Employee App - Build and Promote
 
 on:
   push:
@@ -10,31 +10,76 @@ on:
       - "backend/**"
       - "db/**"
       - "dev-chart/**"
-      - ".github/workflows/eks-dev-deploy.yml"
+      - ".github/workflows/eks-deploy.yml"
 
   workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to deploy"
+        type: choice
+        required: true
+        default: dev
+        options:
+          - dev
+          - qa
+          - uat
+          - prod
+
+      image_tag:
+        description: "Existing DEV image SHA for QA/UAT/PROD"
+        type: string
+        required: false
 
 permissions:
   contents: read
   id-token: write
 
+concurrency:
+  group: employee-app-${{ github.event_name == 'push' && 'dev' || inputs.environment }}
+  cancel-in-progress: false
+
 env:
   AWS_REGION: ap-south-1
   EKS_CLUSTER_NAME: dev-eks-cluster
   DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
-  IMAGE_TAG: ${{ github.sha }}
 
 jobs:
-  build-and-deploy:
-    name: Build, Push and Deploy Dev
+  deploy:
+    name: Build or Promote - ${{ github.event_name == 'push' && 'dev' || inputs.environment }}
+
     runs-on: ubuntu-latest
-    environment: development
+
+    environment: ${{ github.event_name == 'push' && 'development' || inputs.environment == 'dev' && 'development' || inputs.environment == 'prod' && 'production' || inputs.environment }}
+
+    env:
+      TARGET_ENV: ${{ github.event_name == 'push' && 'dev' || inputs.environment }}
+      IMAGE_TAG: ${{ github.event_name == 'push' && github.sha || inputs.environment == 'dev' && github.sha || inputs.image_tag }}
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Configure AWS Credentials
+      - name: Validate inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          case "$TARGET_ENV" in
+            dev|qa|uat|prod) ;;
+            *) echo "Invalid environment"; exit 1 ;;
+          esac
+
+          if [[ -z "$IMAGE_TAG" ]]; then
+            echo "An image tag is required."
+            exit 1
+          fi
+
+          if [[ "$TARGET_ENV" != "dev" && "$IMAGE_TAG" == "$GITHUB_SHA" ]]; then
+            echo "For QA/UAT/Prod, enter the SHA of the existing DEV image."
+            exit 1
+          fi
+
+      - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
@@ -53,82 +98,101 @@ jobs:
           password: ${{ secrets.DOCKER_TOKEN }}
 
       - name: Set up Docker Buildx
+        if: ${{ github.event_name == 'push' || inputs.environment == 'dev' }}
         uses: docker/setup-buildx-action@v3
 
-      - name: Build and Push Frontend Image
+      # Build images only for Dev.
+      - name: Build and push frontend
+        if: ${{ github.event_name == 'push' || inputs.environment == 'dev' }}
         uses: docker/build-push-action@v6
         with:
           context: ./frontend
           push: true
           tags: ${{ secrets.DOCKER_USERNAME }}/employee-frontend:${{ github.sha }}
 
-      - name: Build and Push Backend Image
+      - name: Build and push backend
+        if: ${{ github.event_name == 'push' || inputs.environment == 'dev' }}
         uses: docker/build-push-action@v6
         with:
           context: ./backend
           push: true
           tags: ${{ secrets.DOCKER_USERNAME }}/employee-backend:${{ github.sha }}
 
-      - name: Build and Push Database Image
+      - name: Build and push database
+        if: ${{ github.event_name == 'push' || inputs.environment == 'dev' }}
         uses: docker/build-push-action@v6
         with:
           context: ./db
           push: true
           tags: ${{ secrets.DOCKER_USERNAME }}/employee-db:${{ github.sha }}
 
-      - name: Create Dev Namespace
-        run: |
-          kubectl create namespace app-dev \
-            --dry-run=client -o yaml | kubectl apply -f -
-
-      
-      - name: Configure Docker Hub Pull Secret
-        env:
-          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
-          DOCKER_TOKEN: ${{ secrets.DOCKER_TOKEN }}
+      - name: Verify images exist
         shell: bash
         run: |
           set -euo pipefail
 
-          test -n "$DOCKER_USERNAME" || {
-            echo "ERROR: Docker username is empty"
-            exit 1
-          }
+          docker manifest inspect \
+            "$DOCKER_USERNAME/employee-frontend:$IMAGE_TAG" >/dev/null
 
-          test -n "$DOCKER_TOKEN" || {
-            echo "ERROR: Docker token is empty"
-            exit 1
-          }
+          docker manifest inspect \
+            "$DOCKER_USERNAME/employee-backend:$IMAGE_TAG" >/dev/null
+
+          docker manifest inspect \
+            "$DOCKER_USERNAME/employee-db:$IMAGE_TAG" >/dev/null
+
+          echo "Verified images with tag: $IMAGE_TAG"
+
+      - name: Create target namespace
+        run: |
+          kubectl create namespace "app-${TARGET_ENV}" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Configure Docker Hub pull secret
+        env:
+          DH_USER: ${{ secrets.DOCKER_USERNAME }}
+          DH_TOKEN: ${{ secrets.DOCKER_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -n "$DH_USER"
+          test -n "$DH_TOKEN"
 
           kubectl create secret docker-registry dockerhub-secret \
-            --namespace=app-dev \
+            --namespace="app-${TARGET_ENV}" \
             --docker-server=https://index.docker.io/v1/ \
-            --docker-username="$DOCKER_USERNAME" \
-            --docker-password="$DOCKER_TOKEN" \
-            --dry-run=client \
-            -o yaml | kubectl apply -f -
+            --docker-username="$DH_USER" \
+            --docker-password="$DH_TOKEN" \
+            --dry-run=client -o yaml | kubectl apply -f -
 
+      - name: Validate Helm chart
+        run: helm lint ./dev-chart
 
-      - name: Validate Helm Chart
+      - name: Deploy application
+        shell: bash
         run: |
-          helm lint ./dev-chart
+          set -euo pipefail
 
-      - name: Deploy Application to Dev
-        run: |
+          echo "Environment: $TARGET_ENV"
+          echo "Image tag: $IMAGE_TAG"
+
           helm upgrade --install employee-app ./dev-chart \
-            --namespace app-dev \
+            --namespace "app-${TARGET_ENV}" \
             --create-namespace \
-            --set frontend.image.repository="$DOCKER_USERNAME/employee-frontend" \
-            --set frontend.image.tag="$IMAGE_TAG" \
-            --set backend.image.repository="$DOCKER_USERNAME/employee-backend" \
-            --set backend.image.tag="$IMAGE_TAG" \
-            --set db.image.repository="$DOCKER_USERNAME/employee-db" \
-            --set db.image.tag="$IMAGE_TAG" \
+            --set-string frontend.image.repository="$DOCKER_USERNAME/employee-frontend" \
+            --set-string frontend.image.tag="$IMAGE_TAG" \
+            --set-string backend.image.repository="$DOCKER_USERNAME/employee-backend" \
+            --set-string backend.image.tag="$IMAGE_TAG" \
+            --set-string db.image.repository="$DOCKER_USERNAME/employee-db" \
+            --set-string db.image.tag="$IMAGE_TAG" \
             --wait \
-            --timeout 5m
+            --timeout 10m
 
-      - name: Verify Deployment
+      - name: Check deployment
+        if: always()
         run: |
-          kubectl get deployments -n app-dev
-          kubectl get pods -n app-dev
-          kubectl get services -n app-dev
+          kubectl get deployments,pods,services \
+            -n "app-${TARGET_ENV}" || true
+
+          kubectl get events -n "app-${TARGET_ENV}" \
+            --sort-by=.metadata.creationTimestamp | tail -n 30 || true
