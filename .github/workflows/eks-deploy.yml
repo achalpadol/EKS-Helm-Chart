@@ -50,7 +50,6 @@ concurrency:
 
 env:
   AWS_REGION: ap-south-1
-  EKS_CLUSTER_NAME: qa-eks-cluster
   DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
 
 jobs:
@@ -67,19 +66,20 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # Validate environment and promotion tags.
       - name: Validate inputs
         shell: bash
         env:
-          FRONTEND_TAG: ${{ inputs.frontend_tag }}
-          BACKEND_TAG: ${{ inputs.backend_tag }}
-          DB_TAG: ${{ inputs.db_tag }}
+          FRONTEND_INPUT: ${{ inputs.frontend_tag }}
+          BACKEND_INPUT: ${{ inputs.backend_tag }}
+          DB_INPUT: ${{ inputs.db_tag }}
         run: |
           set -euo pipefail
 
           case "$TARGET_ENV" in
             dev|qa|uat|prod) ;;
             *)
-              echo "Invalid target environment."
+              echo "Invalid target environment: $TARGET_ENV"
               exit 1
               ;;
           esac
@@ -89,7 +89,7 @@ jobs:
             exit 0
           fi
 
-          for tag in "$FRONTEND_TAG" "$BACKEND_TAG" "$DB_TAG"; do
+          for tag in "$FRONTEND_INPUT" "$BACKEND_INPUT" "$DB_INPUT"; do
             if [[ -z "$tag" ]]; then
               echo "All three image tags are required for QA/UAT/Prod."
               exit 1
@@ -103,17 +103,81 @@ jobs:
 
           echo "All promotion inputs are valid."
 
+      # Select the correct cluster for the selected environment.
+      - name: Select EKS cluster
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          case "$TARGET_ENV" in
+            dev)  CLUSTER="dev-eks-cluster" ;;
+            qa)   CLUSTER="qa-eks-cluster" ;;
+            uat)  CLUSTER="uat-eks-cluster" ;;
+            prod) CLUSTER="prod-eks-cluster" ;;
+            *)
+              echo "Invalid environment: $TARGET_ENV"
+              exit 1
+              ;;
+          esac
+
+          echo "EKS_CLUSTER_NAME=$CLUSTER" >> "$GITHUB_ENV"
+          echo "Selected cluster: $CLUSTER"
+
+      # Authenticate to AWS using GitHub OIDC.
       - name: Configure AWS credentials
+        id: configure_aws
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Update kubeconfig
+      - name: Verify AWS identity and EKS cluster
+        id: verify_eks
+        shell: bash
         run: |
+          set -euo pipefail
+
+          echo "=== AWS identity ==="
+          aws sts get-caller-identity
+
+          echo "=== EKS cluster ==="
+          aws eks describe-cluster \
+            --name "$EKS_CLUSTER_NAME" \
+            --region "$AWS_REGION" \
+            --query 'cluster.{Name:name,Status:status,AuthMode:accessConfig.authenticationMode}' \
+            --output table
+
+      # Configure kubectl for the selected EKS cluster.
+      - name: Update kubeconfig
+        id: update_kubeconfig
+        run: |
+          set -euo pipefail
+
           aws eks update-kubeconfig \
             --region "$AWS_REGION" \
             --name "$EKS_CLUSTER_NAME"
+
+          kubectl config current-context
+
+      # Test authentication before modifying Kubernetes resources.
+      - name: Debug EKS authentication
+        id: debug_eks
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=== Generate EKS token ==="
+          aws eks get-token \
+            --cluster-name "$EKS_CLUSTER_NAME" \
+            --region "$AWS_REGION" \
+            --query 'status.expirationTimestamp' \
+            --output text
+
+          echo "=== Kubernetes API test ==="
+          kubectl get --raw=/version
+
+          echo "=== Namespace permission check ==="
+          kubectl auth can-i create namespaces
 
       - name: Login to Docker Hub
         uses: docker/login-action@v3
@@ -125,7 +189,7 @@ jobs:
         if: ${{ github.event_name == 'push' || inputs.environment == 'dev' }}
         uses: docker/setup-buildx-action@v3
 
-      # Build all three images only in Dev.
+      # Build images only in Dev.
       - name: Build and push frontend
         if: ${{ github.event_name == 'push' || inputs.environment == 'dev' }}
         uses: docker/build-push-action@v6
@@ -150,6 +214,7 @@ jobs:
           push: true
           tags: ${{ secrets.DOCKER_USERNAME }}/employee-db:${{ github.sha }}
 
+      # Use the current commit in Dev and existing DEV image tags elsewhere.
       - name: Select image tags
         shell: bash
         env:
@@ -187,6 +252,8 @@ jobs:
 
       - name: Create target namespace
         run: |
+          set -euo pipefail
+
           kubectl create namespace "app-${TARGET_ENV}" \
             --dry-run=client -o yaml | kubectl apply -f -
 
@@ -217,6 +284,7 @@ jobs:
           set -euo pipefail
 
           echo "Target environment: $TARGET_ENV"
+          echo "EKS cluster: $EKS_CLUSTER_NAME"
           echo "Frontend tag: $FRONTEND_TAG"
           echo "Backend tag: $BACKEND_TAG"
           echo "Database tag: $DB_TAG"
@@ -233,8 +301,10 @@ jobs:
             --wait \
             --timeout 10m
 
+      # Do not run Kubernetes diagnostics if AWS or kubeconfig setup failed.
       - name: Check deployment
-        if: always()
+        if: ${{ always() && steps.configure_aws.outcome == 'success' && steps.update_kubeconfig.outcome == 'success' }}
+        shell: bash
         run: |
           kubectl get deployments,pods,services \
             -n "app-${TARGET_ENV}" || true
