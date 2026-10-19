@@ -108,12 +108,14 @@ jobs:
         run: |
           set -euo pipefail
 
-          helm upgrade --install employee-app ./dev-chart \
+          helm upgrade --install employee-database ./dev-chart \
             --namespace "app-${TARGET_ENV}" \
             --create-namespace \
-            --reuse-values \
-            --set-string db.image.repository="$IMAGE_REPOSITORY" \
-            --set-string db.image.tag="$IMAGE_TAG" \
+            --set frontend.enabled=false \
+            --set backend.enabled=false \
+            --set database.enabled=true \
+            --set-string database.image.repository="$IMAGE_REPOSITORY" \
+            --set-string database.image.tag="$IMAGE_TAG" \
             --wait \
             --timeout 10m
 
