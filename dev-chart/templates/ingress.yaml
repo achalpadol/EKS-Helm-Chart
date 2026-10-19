@@ -19,7 +19,7 @@ spec:
           pathType: Prefix
           backend:
             service:
-             name: {{ .Values.frontend.service.name }}
+             name: {{ .Values.frontend.name }}
              port:
               number: {{ .Values.frontend.service.port }}
 
@@ -27,7 +27,7 @@ spec:
           pathType: Prefix
           backend:
             service:
-              name: {{ .Values.backend.service.name }}
+              name: {{ .Values.backend.name }}
               port:
                 number: {{ .Values.backend.service.port }}
 {{- end }}
