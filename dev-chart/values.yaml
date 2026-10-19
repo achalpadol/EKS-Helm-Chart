@@ -8,6 +8,7 @@ frontend:
     tag: "v2"
     pullPolicy: IfNotPresent
   service:
+    name: frontend
     type: ClusterIP
     port: 80
     targetPort: 80
@@ -23,6 +24,7 @@ backend:
   configMapName: employee-cm
   secretName: mysql-secret
   service:
+    name: backend
     type: ClusterIP
     port: 5000
     targetPort: 5000
@@ -37,6 +39,7 @@ database:
     pullPolicy: IfNotPresent
   secretName: mysql-secret
   service:
+    name: database
     type: ClusterIP
     port: 3306
     targetPort: 3306
