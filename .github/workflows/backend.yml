@@ -1,4 +1,4 @@
-```yaml
+
 name: Backend Build and Promote
 
 on:
@@ -205,4 +205,4 @@ jobs:
           kubectl get events \
             -n "app-${TARGET_ENV}" \
             --sort-by=.metadata.creationTimestamp | tail -n 30 || true
-```
+
