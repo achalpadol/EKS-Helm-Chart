@@ -163,7 +163,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          helm upgrade --install employee-backend ./dev-chart \
+          helm upgrade --install employee-app ./dev-chart \
             --namespace "app-${TARGET_ENV}" \
             --create-namespace \
             --set frontend.enabled=false \
