@@ -25,13 +25,14 @@ backend:
     port: 5000
     targetPort: 5000
 
+
 database:
   enabled: true
   name: database
   replicaCount: 1
   image:
     repository: mysql
-    tag: 8
+    tag: "latest"
     pullPolicy: IfNotPresent
   secretName: mysql-secret
   service:
