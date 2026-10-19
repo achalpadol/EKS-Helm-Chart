@@ -14,8 +14,6 @@ spec:
       labels:
         app: {{ .Values.database.name }}
     spec:
-      imagePullSecrets:
-        - name: dockerhub-secret
       containers:
         - name: {{ .Values.database.name }}
           image: "{{ .Values.database.image.repository }}:{{ .Values.database.image.tag }}"
@@ -26,21 +24,21 @@ spec:
             - name: MYSQL_ROOT_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: mysql-secret
+                  name: {{ .Values.database.secretName }}
                   key: MYSQL_ROOT_PASSWORD
             - name: MYSQL_DATABASE
               valueFrom:
                 secretKeyRef:
-                  name: mysql-secret
+                  name: {{ .Values.database.secretName }}
                   key: MYSQL_DATABASE
             - name: MYSQL_USER
               valueFrom:
                 secretKeyRef:
-                  name: mysql-secret
+                  name: {{ .Values.database.secretName }}
                   key: MYSQL_USER
             - name: MYSQL_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: mysql-secret
+                  name: {{ .Values.database.secretName }}
                   key: MYSQL_PASSWORD
 {{- end }}
