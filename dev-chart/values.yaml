@@ -4,8 +4,8 @@ frontend:
   name: frontend
   replicaCount: 1
   image:
-    repository: docker.io/achalpadol/employee-frontend
-    tag: "v2"
+    repository: ""
+    tag: ""
     pullPolicy: IfNotPresent
   service:
     name: frontend
@@ -18,13 +18,13 @@ backend:
   name: backend
   replicaCount: 1
   image:
-    repository: docker.io/achalpadol/employee-backend
+    repository: ""
     tag: "v1"
     pullPolicy: IfNotPresent
   configMapName: employee-cm
   secretName: mysql-secret
   service:
-    name: app2-backend-service
+    name: backend
     type: ClusterIP
     port: 5000
     targetPort: 5000
@@ -34,8 +34,8 @@ database:
   name: database
   replicaCount: 1
   image:
-    repository: mysql
-    tag: "8"
+    repository: ""
+    tag: ""
     pullPolicy: IfNotPresent
   secretName: mysql-secret
   service:
