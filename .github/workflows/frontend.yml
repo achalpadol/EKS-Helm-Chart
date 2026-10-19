@@ -108,10 +108,12 @@ jobs:
         run: |
           set -euo pipefail
 
-          helm upgrade --install employee-app ./dev-chart \
+          helm upgrade --install employee-frontend ./dev-chart \
             --namespace "app-${TARGET_ENV}" \
             --create-namespace \
-            --reuse-values \
+            --set frontend.enabled=true \
+            --set backend.enabled=false \
+            --set database.enabled=false \
             --set-string frontend.image.repository="$IMAGE_REPOSITORY" \
             --set-string frontend.image.tag="$IMAGE_TAG" \
             --wait \
