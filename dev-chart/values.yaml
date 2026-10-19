@@ -32,17 +32,15 @@ database:
   replicaCount: 1
   image:
     repository: mysql
-    tag: "latest"
+    tag: "8"
     pullPolicy: IfNotPresent
   secretName: mysql-secret
   service:
+    enabled: false
     type: ClusterIP
     port: 3306
     targetPort: 3306
-  persistence:
-    enabled: true
-    size: 10Gi
-
+    
 configMap:
   enabled: true
   name: employee-cm
