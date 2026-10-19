@@ -7,6 +7,7 @@ metadata:
 spec:
   replicas: {{ .Values.backend.replicaCount }}
   selector:
+    matchLabels:
       app: {{ .Values.backend.name }}
   template:
     metadata:
@@ -15,9 +16,8 @@ spec:
     spec:
       containers:
         - name: {{ .Values.backend.name }}
-
           image: "{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag }}"
-          imagePullPolicy: {{ .Values.frontend.image.pullPolicy }}
+          imagePullPolicy: {{ .Values.backend.image.pullPolicy }}
           ports:
             - containerPort: {{ .Values.backend.service.targetPort }}
           env:
@@ -26,30 +26,24 @@ spec:
                 configMapKeyRef:
                   name: employee-cm
                   key: DB_HOST
-
             - name: DB_PORT
               valueFrom:
                 configMapKeyRef:
                   name: employee-cm
                   key: DB_PORT
-
             - name: DB_USER
               valueFrom:
                 secretKeyRef:
                   name: mysql-secret
                   key: MYSQL_USER
-
             - name: DB_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: mysql-secret
                   key: MYSQL_PASSWORD
-
             - name: DB_NAME
               valueFrom:
                 secretKeyRef:
                   name: mysql-secret
                   key: MYSQL_DATABASE
-
-{{- end }}  
-
+{{- end }}
