@@ -25,7 +25,6 @@ backend:
     port: 5000
     targetPort: 5000
 
-
 database:
   enabled: true
   name: database
@@ -39,12 +38,15 @@ database:
     type: ClusterIP
     port: 3306
     targetPort: 3306
-    
+  persistence:
+    enabled: true
+    size: 10Gi
+
 configMap:
   enabled: true
   name: employee-cm
   data:
-    DB_HOST: mysql
+    DB_HOST: database
     DB_PORT: "3306"
 
 secret:
@@ -52,8 +54,8 @@ secret:
   name: mysql-secret
   stringData:
     MYSQL_ROOT_PASSWORD: ""
-    MYSQL_DATABASE: ""
-    MYSQL_USER: ""
+    MYSQL_DATABASE: employee_db
+    MYSQL_USER: employee
     MYSQL_PASSWORD: ""
 
 ingress:
@@ -63,5 +65,3 @@ ingress:
   scheme: internet-facing
   targetType: ip
   host: employee.local
-
-
