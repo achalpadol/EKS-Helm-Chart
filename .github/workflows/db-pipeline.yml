@@ -171,6 +171,7 @@ jobs:
             --set database.enabled=true \
             --set configMap.enabled=false \
             --set secret.enabled=true \
+            --set ingress.enabled=false \
             --set-string database.image.repository="$IMAGE_REPOSITORY" \
             --set-string database.image.tag="$IMAGE_TAG" \
             --wait \
