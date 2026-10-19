@@ -168,6 +168,9 @@ jobs:
             --set frontend.enabled=false \
             --set backend.enabled=true \
             --set database.enabled=false \
+            --set ingress.enabled=false \
+            --set configMap.enabled=false \
+            --set secret.enabled=false \
             --set-string backend.image.repository="$IMAGE_REPOSITORY" \
             --set-string backend.image.tag="$IMAGE_TAG" \
             --wait \
