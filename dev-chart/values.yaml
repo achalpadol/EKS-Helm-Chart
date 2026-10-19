@@ -1,6 +1,7 @@
 
-
 frontend:
+  enabled: true
+  name: frontend
   replicaCount: 1
   image:
     repository: docker.io/achalpadol/employee-frontend
@@ -12,6 +13,8 @@ frontend:
     targetPort: 80
 
 backend:
+  enabled: true
+  name: backend
   replicaCount: 1
   image:
     repository: docker.io/achalpadol/employee-backend
@@ -23,11 +26,14 @@ backend:
     targetPort: 5000
 
 database:
+  enabled: true
+  name: database
   replicaCount: 1
   image:
     repository: mysql
     tag: 8
     pullPolicy: IfNotPresent
+  secretName: mysql-secret
   service:
     type: ClusterIP
     port: 3306
@@ -35,4 +41,29 @@ database:
   persistence:
     enabled: true
     size: 10Gi
+
+configMap:
+  enabled: true
+  name: employee-cm
+  data:
+    DB_HOST: mysql
+    DB_PORT: "3306"
+
+secret:
+  enabled: true
+  name: mysql-secret
+  stringData:
+    MYSQL_ROOT_PASSWORD: ""
+    MYSQL_DATABASE: ""
+    MYSQL_USER: ""
+    MYSQL_PASSWORD: ""
+
+ingress:
+  enabled: true
+  name: employee-management-ingress
+  className: alb
+  scheme: internet-facing
+  targetType: ip
+  host: employee.local
+
 

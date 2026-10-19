@@ -1,24 +1,25 @@
+{{- if .Values.ingress.enabled }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: employee-ingress
+  name: {{ .Values.ingress.name}}
   annotations:
-    alb.ingress.kubernetes.io/scheme: internet-facing
-    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/scheme: {{ .Values.ingress.scheme}}
+    alb.ingress.kubernetes.io/target-type: {{ .Values.ingress.scheme}}
     alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80}]'
 spec:
-  ingressClassName: alb
+  ingressClassName: {{ .Values.ingress.className}}
 
   rules:
-  - host: employee.local
+  - host: {{ .Values.ingress.host}}
+
     http:
       paths:
-
         - path: /
           pathType: Prefix
           backend:
             service:
-             name: frontend-service
+             name: {{ .Values.frontend.service.name }}
              port:
               number: {{ .Values.frontend.service.port }}
 
@@ -26,6 +27,8 @@ spec:
           pathType: Prefix
           backend:
             service:
-              name: app2-backend-service
+              name: {{ .Values.frontend.service.name }}
               port:
                 number: {{ .Values.backend.service.port }}
+{{- end }}
+
