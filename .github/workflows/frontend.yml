@@ -170,7 +170,10 @@ jobs:
             --create-namespace \
             --set frontend.enabled=true \
             --set backend.enabled=false \
-            --set db.enabled=false \
+            --set .databaseenabled=false \
+            --set ingress.enabled=true \
+            --set configMap.enabled=false \
+            --set secret.enabled=false \
             --set-string frontend.image.repository="$IMAGE_REPOSITORY" \
             --set-string frontend.image.tag="$IMAGE_TAG" \
             --wait \
