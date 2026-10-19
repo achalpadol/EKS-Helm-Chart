@@ -1,3 +1,4 @@
+```yaml
 name: Backend Build and Promote
 
 on:
@@ -6,7 +7,7 @@ on:
     paths:
       - "backend/**"
       - "dev-chart/**"
-      - ".github/workflows/backend-pipeline.yml"
+      - ".github/workflows/backend.yml"
 
   workflow_dispatch:
     inputs:
@@ -31,12 +32,12 @@ concurrency:
 
 env:
   AWS_REGION: ap-south-1
-  DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
   TARGET_ENV: ${{ github.event_name == 'push' && 'dev' || inputs.environment }}
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+
     environment: ${{ github.event_name == 'push' && 'development' || inputs.environment == 'dev' && 'development' || inputs.environment == 'prod' && 'production' || inputs.environment }}
 
     env:
@@ -52,6 +53,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           if [[ "$TARGET_ENV" != "dev" ]]; then
             if [[ ! "$IMAGE_INPUT" =~ ^[a-fA-F0-9]{7,64}$ ]]; then
               echo "Enter a valid existing DEV backend image SHA."
@@ -63,6 +65,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           case "$TARGET_ENV" in
             dev)  CLUSTER="dev-eks-cluster" ;;
             qa)   CLUSTER="qa-eks-cluster" ;;
@@ -70,6 +73,7 @@ jobs:
             prod) CLUSTER="prod-eks-cluster" ;;
             *) echo "Invalid environment"; exit 1 ;;
           esac
+
           echo "EKS_CLUSTER_NAME=$CLUSTER" >> "$GITHUB_ENV"
 
       - name: Configure AWS credentials
@@ -82,7 +86,9 @@ jobs:
       - name: Verify AWS identity and EKS cluster
         run: |
           set -euo pipefail
+
           aws sts get-caller-identity
+
           aws eks describe-cluster \
             --name "$EKS_CLUSTER_NAME" \
             --region "$AWS_REGION"
@@ -91,9 +97,11 @@ jobs:
         id: update_kubeconfig
         run: |
           set -euo pipefail
+
           aws eks update-kubeconfig \
             --region "$AWS_REGION" \
             --name "$EKS_CLUSTER_NAME"
+
           kubectl config current-context
           kubectl get --raw=/version
 
@@ -118,8 +126,10 @@ jobs:
       - name: Select backend image tag
         env:
           IMAGE_INPUT: ${{ inputs.image_tag }}
+        shell: bash
         run: |
           set -euo pipefail
+
           if [[ "$TARGET_ENV" == "dev" ]]; then
             echo "IMAGE_TAG=$GITHUB_SHA" >> "$GITHUB_ENV"
           else
@@ -129,12 +139,16 @@ jobs:
       - name: Verify backend image
         run: |
           set -euo pipefail
+
           docker manifest inspect \
             "$IMAGE_REPOSITORY:$IMAGE_TAG" >/dev/null
+
           echo "Verified backend image."
 
       - name: Create target namespace
         run: |
+          set -euo pipefail
+
           kubectl create namespace "app-${TARGET_ENV}" \
             --dry-run=client -o yaml | kubectl apply -f -
 
@@ -142,8 +156,10 @@ jobs:
         env:
           DH_USER: ${{ secrets.DOCKER_USERNAME }}
           DH_TOKEN: ${{ secrets.DOCKER_TOKEN }}
+        shell: bash
         run: |
           set -euo pipefail
+
           test -n "$DH_USER"
           test -n "$DH_TOKEN"
 
@@ -177,9 +193,16 @@ jobs:
 
       - name: Check deployment
         if: ${{ always() && steps.configure_aws.outcome == 'success' && steps.update_kubeconfig.outcome == 'success' }}
+        shell: bash
         run: |
+          echo "Checking resources in app-${TARGET_ENV}..."
+
           kubectl get deployments,pods,services \
             -n "app-${TARGET_ENV}" || true
-          kubectl get events -n "app-${TARGET_ENV}" \
+
+          echo "Recent Kubernetes events:"
+
+          kubectl get events \
+            -n "app-${TARGET_ENV}" \
             --sort-by=.metadata.creationTimestamp | tail -n 30 || true
-			
+```
