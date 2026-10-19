@@ -103,15 +103,17 @@ jobs:
             "${IMAGE_REPOSITORY}:${IMAGE_TAG}" >/dev/null
           echo "Verified backend image."
 
-      - name: Deploy backend only
+     - name: Deploy backend only
         shell: bash
         run: |
           set -euo pipefail
 
-          helm upgrade --install employee-app ./dev-chart \
+          helm upgrade --install employee-backend ./dev-chart \
             --namespace "app-${TARGET_ENV}" \
             --create-namespace \
-            --reuse-values \
+            --set frontend.enabled=false \
+            --set backend.enabled=true \
+            --set database.enabled=false \
             --set-string backend.image.repository="$IMAGE_REPOSITORY" \
             --set-string backend.image.tag="$IMAGE_TAG" \
             --wait \
