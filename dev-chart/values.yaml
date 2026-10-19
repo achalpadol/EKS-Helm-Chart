@@ -24,7 +24,7 @@ backend:
   configMapName: employee-cm
   secretName: mysql-secret
   service:
-    name: backend
+    name: app2-backend-service
     type: ClusterIP
     port: 5000
     targetPort: 5000
