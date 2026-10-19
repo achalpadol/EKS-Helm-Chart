@@ -20,6 +20,8 @@ backend:
     repository: docker.io/achalpadol/employee-backend
     tag: "v1"
     pullPolicy: IfNotPresent
+  configMapName: employee-cm
+  secretName: mysql-secret
   service:
     type: ClusterIP
     port: 5000
@@ -53,10 +55,10 @@ secret:
   enabled: true
   name: mysql-secret
   stringData:
-    MYSQL_ROOT_PASSWORD: ""
+    MYSQL_ROOT_PASSWORD: "rootpassword"
     MYSQL_DATABASE: employee_db
     MYSQL_USER: employee
-    MYSQL_PASSWORD: ""
+    MYSQL_PASSWORD: "employee123"
 
 ingress:
   enabled: true
