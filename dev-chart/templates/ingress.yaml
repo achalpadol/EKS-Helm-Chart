@@ -4,8 +4,8 @@ kind: Ingress
 metadata:
   name: {{ .Values.ingress.name}}
   annotations:
-    alb.ingress.kubernetes.io/scheme: {{ .Values.ingress.scheme}}
-    alb.ingress.kubernetes.io/target-type: {{ .Values.ingress.scheme}}
+    alb.ingress.kubernetes.io/scheme: {{ .Values.ingress.scheme }}
+    alb.ingress.kubernetes.io/target-type: {{ .Values.ingress.targetType }}
     alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80}]'
 spec:
   ingressClassName: {{ .Values.ingress.className}}
