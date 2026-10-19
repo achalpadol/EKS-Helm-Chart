@@ -27,7 +27,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: backend-${{ github.event_name == 'push' && 'dev' || inputs.environment }}
+  group: employee-app-${{ github.event_name == 'push' && 'dev' || inputs.environment }}-helm
   cancel-in-progress: false
 
 env:
