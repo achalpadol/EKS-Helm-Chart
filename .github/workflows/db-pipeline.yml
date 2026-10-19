@@ -158,6 +158,7 @@ jobs:
       - name: Validate Helm chart
         run: helm lint ./dev-chart
 
+      
       - name: Deploy database only
         run: |
           set -euo pipefail
@@ -167,9 +168,11 @@ jobs:
             --create-namespace \
             --set frontend.enabled=false \
             --set backend.enabled=false \
-            --set db.enabled=true \
-            --set-string db.image.repository="$IMAGE_REPOSITORY" \
-            --set-string db.image.tag="$IMAGE_TAG" \
+            --set database.enabled=true \
+            --set configMap.enabled=false \
+            --set secret.enabled=false \
+            --set-string database.image.repository="$IMAGE_REPOSITORY" \
+            --set-string database.image.tag="$IMAGE_TAG" \
             --wait \
             --timeout 10m
 
