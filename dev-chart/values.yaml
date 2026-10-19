@@ -36,7 +36,6 @@ database:
     pullPolicy: IfNotPresent
   secretName: mysql-secret
   service:
-    enabled: false
     type: ClusterIP
     port: 3306
     targetPort: 3306
