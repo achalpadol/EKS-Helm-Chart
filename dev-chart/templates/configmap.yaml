@@ -1,3 +1,4 @@
+{{- if .Values.ConfigMap.enabled }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -5,3 +6,4 @@ metadata:
 data:
   DB_HOST: mysql
   DB_PORT: "3306"
+{{- end }}
