@@ -178,10 +178,9 @@ jobs:
 
       - name: Check deployment
         if: ${{ always() && steps.configure_aws.outcome == 'success' && steps.update_kubeconfig.outcome == 'success' }}
+        shell: bash
         run: |
           kubectl get deployments,pods,services \
             -n "app-${TARGET_ENV}" || true
           kubectl get events -n "app-${TARGET_ENV}" \
             --sort-by=.metadata.creationTimestamp | tail -n 30 || true
-			
-			
