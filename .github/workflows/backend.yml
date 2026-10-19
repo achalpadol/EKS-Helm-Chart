@@ -167,7 +167,7 @@ jobs:
             --create-namespace \
             --set frontend.enabled=false \
             --set backend.enabled=true \
-            --set db.enabled=false \
+            --set database.enabled=false \
             --set-string backend.image.repository="$IMAGE_REPOSITORY" \
             --set-string backend.image.tag="$IMAGE_TAG" \
             --wait \
