@@ -104,6 +104,19 @@ jobs:
           esac
 
           echo "EKS_CLUSTER_NAME=$CLUSTER" >> "$GITHUB_ENV"
+          
+      - name: Define deployment variables
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          NAMESPACE="app-${TARGET_ENV}"
+          echo "NAMESPACE=$NAMESPACE" >> "$GITHUB_ENV"
+
+          echo "Release: $RELEASE"
+          echo "Chart: $CHART"
+          echo "Values file: $VALUES_FILE"
+          echo "Namespace: $NAMESPACE"
 
       - name: Configure AWS credentials
         id: configure_aws
