@@ -206,6 +206,11 @@ jobs:
       - name: Deploy frontend only
         run: |
           set -euo pipefail
+          NAMESPACE="app-${TARGET_ENV}"
+
+          echo "Deploying to namespace: ${NAMESPACE}"
+          echo "Helm release: ${RELEASE}"
+          echo "Helm chart: ${CHART}"
 
           helm upgrade --install "${RELEASE}" "${CHART}" \
             --namespace "${NAMESPACE}" \
