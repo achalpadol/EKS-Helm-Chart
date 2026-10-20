@@ -174,8 +174,8 @@ jobs:
             --create-namespace \
             -f "${VALUES_FILE}" \
             --set frontend.enabled=true \
-            --set backend.enabled=true \
-            --set database.enabled=true \
+            --set backend.enabled=false \
+            --set database.enabled=false \
             --set ingress.enabled=true \
             --set configMap.enabled=false \
             --set secret.enabled=false \
