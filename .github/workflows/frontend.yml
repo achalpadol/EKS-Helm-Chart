@@ -32,6 +32,10 @@ concurrency:
 
 env:
   AWS_REGION: ap-south-1
+  RELEASE: employee-backend
+  CHART: ./dev-chart
+  VALUES_FILE: ./dev-chart/values.yaml
+  AWS_REGION: ap-south-1
   DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
   TARGET_ENV: ${{ github.event_name == 'push' && 'dev' || inputs.environment }}
 
@@ -165,9 +169,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          helm upgrade --install employee-backend ./dev-chart \
-            --namespace "app-${TARGET_ENV}" \
+          helm upgrade --install "${RELEASE}" "${CHART}" \
+            --namespace "${NAMESPACE}" \
             --create-namespace \
+            -f "${VALUES_FILE}" \
             --set frontend.enabled=true \
             --set backend.enabled=false \
             --set database.enabled=false \
