@@ -49,6 +49,20 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        
+      # ADDED HERE: immediately after Checkout repository
+      - name: Define deployment variables
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          NAMESPACE="app-${TARGET_ENV}"
+          echo "NAMESPACE=$NAMESPACE" >> "$GITHUB_ENV"
+
+          echo "RELEASE=$RELEASE"
+          echo "CHART=$CHART"
+          echo "VALUES_FILE=$VALUES_FILE"
+          echo "NAMESPACE=$NAMESPACE"
 
       - name: Validate inputs
         env:
