@@ -36,6 +36,7 @@ env:
   VALUES_FILE: ./dev-chart/values.yaml
   AWS_REGION: ap-south-1
   DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+  NAMESPACE: app-dev
   TARGET_ENV: ${{ github.event_name == 'push' && 'dev' || inputs.environment }}
 
 jobs:
