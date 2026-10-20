@@ -30,14 +30,15 @@ concurrency:
   group: employee-app-${{ github.event_name == 'push' && 'dev' || inputs.environment }}-helm
   cancel-in-progress: false
 
+
 env:
   RELEASE: employee-backend
   CHART: ./dev-chart
   VALUES_FILE: ./dev-chart/values.yaml
   AWS_REGION: ap-south-1
   DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
-  NAMESPACE: app-${{ github.event_name == 'push' && 'dev' || inputs.environment }}
   TARGET_ENV: ${{ github.event_name == 'push' && 'dev' || inputs.environment }}
+  NAMESPACE: app-${{ github.event_name == 'push' && 'dev' || inputs.environment }}
 
 jobs:
   deploy:
@@ -203,29 +204,31 @@ jobs:
       - name: Validate Helm chart
         run: helm lint ./dev-chart
 
+      
       - name: Deploy frontend only
+        shell: bash
         run: |
           set -euo pipefail
-          NAMESPACE="app-${TARGET_ENV}"
 
-          echo "Deploying to namespace: ${NAMESPACE}"
-          echo "Helm release: ${RELEASE}"
-          echo "Helm chart: ${CHART}"
+          echo "Deploying release: ${RELEASE}"
+          echo "Namespace: ${NAMESPACE}"
+          echo "Frontend image: ${IMAGE_REPOSITORY}:${IMAGE_TAG}"
 
           helm upgrade --install "${RELEASE}" "${CHART}" \
             --namespace "${NAMESPACE}" \
             --create-namespace \
             -f "${VALUES_FILE}" \
             --set frontend.enabled=true \
-            --set backend.enabled=false \
-            --set database.enabled=false \
+            --set backend.enabled=true \
+            --set database.enabled=true \
             --set ingress.enabled=true \
             --set configMap.enabled=false \
             --set secret.enabled=false \
-            --set-string frontend.image.repository="$IMAGE_REPOSITORY" \
-            --set-string frontend.image.tag="$IMAGE_TAG" \
+            --set-string frontend.image.repository="${IMAGE_REPOSITORY}" \
+            --set-string frontend.image.tag="${IMAGE_TAG}" \
             --wait \
             --timeout 10m
+
 
       - name: Check deployment
         if: ${{ always() && steps.configure_aws.outcome == 'success' && steps.update_kubeconfig.outcome == 'success' }}
