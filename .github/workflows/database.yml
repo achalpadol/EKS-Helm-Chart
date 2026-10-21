@@ -1,3 +1,4 @@
+
 name: Database Build and Promote
 
 on:
@@ -31,12 +32,12 @@ concurrency:
 
 env:
   AWS_REGION: ap-south-1
-  DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
   TARGET_ENV: ${{ github.event_name == 'push' && 'dev' || inputs.environment }}
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+
     environment: ${{ github.event_name == 'push' && 'development' || inputs.environment == 'dev' && 'development' || inputs.environment == 'prod' && 'production' || inputs.environment }}
 
     env:
@@ -46,15 +47,36 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Validate inputs
+      - name: Select environment values file
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          case "$TARGET_ENV" in
+            dev)  VALUES_FILE="./dev-chart/values-dev.yaml" ;;
+            qa)   VALUES_FILE="./dev-chart/values-qa.yaml" ;;
+            uat)  VALUES_FILE="./dev-chart/values-uat.yaml" ;;
+            prod) VALUES_FILE="./dev-chart/values-prod.yaml" ;;
+            *) echo "Invalid environment"; exit 1 ;;
+          esac
+
+          test -f "$VALUES_FILE" || {
+            echo "Values file not found: $VALUES_FILE"
+            exit 1
+          }
+
+          echo "VALUES_FILE=$VALUES_FILE" >> "$GITHUB_ENV"
+
+      - name: Validate promotion inputs
         env:
           IMAGE_INPUT: ${{ inputs.image_tag }}
         shell: bash
         run: |
           set -euo pipefail
+
           if [[ "$TARGET_ENV" != "dev" ]]; then
-            if [[ ! "$IMAGE_INPUT" =~ ^[a-fA-F0-9]{7,64}$ ]]; then
-              echo "Enter a valid existing DEV database image SHA."
+            if [[ ! "$IMAGE_INPUT" =~ ^[a-fA-F0-9]{40}$ ]]; then
+              echo "Enter the full 40-character DEV image commit SHA."
               exit 1
             fi
           fi
@@ -63,6 +85,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           case "$TARGET_ENV" in
             dev)  CLUSTER="dev-eks-cluster" ;;
             qa)   CLUSTER="qa-eks-cluster" ;;
@@ -70,6 +93,7 @@ jobs:
             prod) CLUSTER="prod-eks-cluster" ;;
             *) echo "Invalid environment"; exit 1 ;;
           esac
+
           echo "EKS_CLUSTER_NAME=$CLUSTER" >> "$GITHUB_ENV"
 
       - name: Configure AWS credentials
@@ -82,7 +106,9 @@ jobs:
       - name: Verify AWS identity and EKS cluster
         run: |
           set -euo pipefail
+
           aws sts get-caller-identity
+
           aws eks describe-cluster \
             --name "$EKS_CLUSTER_NAME" \
             --region "$AWS_REGION"
@@ -91,9 +117,11 @@ jobs:
         id: update_kubeconfig
         run: |
           set -euo pipefail
+
           aws eks update-kubeconfig \
             --region "$AWS_REGION" \
             --name "$EKS_CLUSTER_NAME"
+
           kubectl config current-context
           kubectl get --raw=/version
 
@@ -107,7 +135,8 @@ jobs:
         if: ${{ github.event_name == 'push' || inputs.environment == 'dev' }}
         uses: docker/setup-buildx-action@v3
 
-      - name: Build and push database
+      # Build and push only for Dev.
+      - name: Build and push database image
         if: ${{ github.event_name == 'push' || inputs.environment == 'dev' }}
         uses: docker/build-push-action@v6
         with:
@@ -115,26 +144,36 @@ jobs:
           push: true
           tags: ${{ env.IMAGE_REPOSITORY }}:${{ github.sha }}
 
+      # QA, UAT and Prod reuse the existing Dev image SHA.
       - name: Select database image tag
         env:
           IMAGE_INPUT: ${{ inputs.image_tag }}
+        shell: bash
         run: |
           set -euo pipefail
+
           if [[ "$TARGET_ENV" == "dev" ]]; then
-            echo "IMAGE_TAG=$GITHUB_SHA" >> "$GITHUB_ENV"
+            IMAGE_TAG="$GITHUB_SHA"
           else
-            echo "IMAGE_TAG=$IMAGE_INPUT" >> "$GITHUB_ENV"
+            IMAGE_TAG="$IMAGE_INPUT"
           fi
 
-      - name: Verify database image
+          echo "IMAGE_TAG=$IMAGE_TAG" >> "$GITHUB_ENV"
+          echo "Selected image: $IMAGE_REPOSITORY:$IMAGE_TAG"
+
+      - name: Verify database image exists
         run: |
           set -euo pipefail
+
           docker manifest inspect \
             "$IMAGE_REPOSITORY:$IMAGE_TAG" >/dev/null
-          echo "Verified database image."
+
+          echo "Verified image: $IMAGE_REPOSITORY:$IMAGE_TAG"
 
       - name: Create target namespace
         run: |
+          set -euo pipefail
+
           kubectl create namespace "app-${TARGET_ENV}" \
             --dry-run=client -o yaml | kubectl apply -f -
 
@@ -144,6 +183,7 @@ jobs:
           DH_TOKEN: ${{ secrets.DOCKER_TOKEN }}
         run: |
           set -euo pipefail
+
           test -n "$DH_USER"
           test -n "$DH_TOKEN"
 
@@ -155,9 +195,10 @@ jobs:
             --dry-run=client -o yaml | kubectl apply -f -
 
       - name: Validate Helm chart
-        run: helm lint ./dev-chart
+        run: |
+          set -euo pipefail
+          helm lint ./dev-chart -f "$VALUES_FILE"
 
-      
       - name: Deploy database only
         run: |
           set -euo pipefail
@@ -165,6 +206,7 @@ jobs:
           helm upgrade --install employee-app ./dev-chart \
             --namespace "app-${TARGET_ENV}" \
             --create-namespace \
+            -f "$VALUES_FILE" \
             --set frontend.enabled=false \
             --set backend.enabled=false \
             --set database.enabled=true \
@@ -182,5 +224,6 @@ jobs:
         run: |
           kubectl get deployments,pods,services \
             -n "app-${TARGET_ENV}" || true
+
           kubectl get events -n "app-${TARGET_ENV}" \
             --sort-by=.metadata.creationTimestamp | tail -n 30 || true
