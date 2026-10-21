@@ -277,13 +277,22 @@ jobs:
       # 12. Create Kubernetes namespace
       # --------------------------------------------------
 
+      # 5. Create target namespace if it does not exist
+      # --------------------------------------------------
       - name: Create target namespace
         shell: bash
         run: |
           set -euo pipefail
 
-          kubectl create namespace "app-${TARGET_ENV}" \
-            --dry-run=client -o yaml | kubectl apply -f -
+          NAMESPACE="app-${TARGET_ENV}"
+
+          if kubectl get namespace "$NAMESPACE" >/dev/null 2>&1; then
+            echo "Namespace $NAMESPACE already exists; skipping creation."
+          else
+            echo "Namespace $NAMESPACE does not exist. Creating it..."
+            kubectl create namespace "$NAMESPACE"
+            echo "Namespace $NAMESPACE created successfully."
+          fi
 
       # --------------------------------------------------
       # 13. Configure Docker Hub pull secret
