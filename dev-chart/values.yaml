@@ -19,7 +19,7 @@ backend:
   replicaCount: 1
   image:
     repository: ""
-    tag: "v1"
+    tag: ""
     pullPolicy: IfNotPresent
   configMapName: employee-cm
   secretName: mysql-secret
