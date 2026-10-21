@@ -1,137 +1,73 @@
-
-name: Frontend Build and Promote
+```yaml
+name: Frontend Build and Deploy DEV
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
     paths:
       - "frontend/**"
       - "dev-chart/**"
-      - ".github/workflows/frontend-pipeline.yml"
+      - ".github/workflows/frontend.yml"
 
   workflow_dispatch:
-    inputs:
-      environment:
-        description: "Environment to deploy"
-        type: choice
-        required: true
-        default: dev
-        options: [dev, qa, uat, prod]
-
-      image_tag:
-        description: "Existing frontend image SHA for QA/UAT/PROD"
-        type: string
-        required: false
 
 permissions:
   contents: read
   id-token: write
 
 concurrency:
-  group: employee-app-${{ github.event_name == 'push' && 'dev' || inputs.environment }}-helm
+  group: employee-app-dev-helm
   cancel-in-progress: false
 
 env:
+  AWS_REGION: ap-south-1
+  EKS_CLUSTER_NAME: dev-eks-cluster
+  NAMESPACE: app-dev
   RELEASE: employee-app
   CHART: ./dev-chart
-  AWS_REGION: ap-south-1
-  TARGET_ENV: ${{ github.event_name == 'push' && 'dev' || inputs.environment }}
-  NAMESPACE: app-${{ github.event_name == 'push' && 'dev' || inputs.environment }}
 
 jobs:
-  deploy:
+  build-and-deploy:
     runs-on: ubuntu-latest
 
-    environment: ${{ github.event_name == 'push' && 'development' || inputs.environment == 'dev' && 'development' || inputs.environment == 'prod' && 'production' || inputs.environment }}
+    environment: development
 
     env:
       DEV_IMAGE: ${{ secrets.DOCKER_USERNAME }}/employee-frontend-dev
-      QA_IMAGE: ${{ secrets.DOCKER_USERNAME }}/employee-frontend-qa
-      UAT_IMAGE: ${{ secrets.DOCKER_USERNAME }}/employee-frontend-uat
-      PROD_IMAGE: ${{ secrets.DOCKER_USERNAME }}/employee-frontend-prod
 
     steps:
-      # --------------------------------------------------
       # 1. Checkout repository
-      # --------------------------------------------------
-
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # --------------------------------------------------
-      # 2. Select environment values file and EKS cluster
-      # --------------------------------------------------
-
-      - name: Select environment configuration
+      # 2. Validate configuration
+      - name: Validate configuration
         shell: bash
         run: |
           set -euo pipefail
 
-          case "$TARGET_ENV" in
-            dev)
-              VALUES_FILE="./dev-chart/values-dev.yaml"
-              CLUSTER="dev-eks-cluster"
-              ;;
-            qa)
-              VALUES_FILE="./dev-chart/values-qa.yaml"
-              CLUSTER="qa-eks-cluster"
-              ;;
-            uat)
-              VALUES_FILE="./dev-chart/values-uat.yaml"
-              CLUSTER="uat-eks-cluster"
-              ;;
-            prod)
-              VALUES_FILE="./dev-chart/values-prod.yaml"
-              CLUSTER="prod-eks-cluster"
-              ;;
-            *)
-              echo "Invalid environment: $TARGET_ENV"
-              exit 1
-              ;;
-          esac
-
-          test -f "$VALUES_FILE" || {
-            echo "Values file not found: $VALUES_FILE"
+          test -f "$CHART/values-dev.yaml" || {
+            echo "ERROR: $CHART/values-dev.yaml not found"
             exit 1
           }
 
-          echo "VALUES_FILE=$VALUES_FILE" >> "$GITHUB_ENV"
-          echo "EKS_CLUSTER_NAME=$CLUSTER" >> "$GITHUB_ENV"
+          test -f "$CHART/Chart.yaml" || {
+            echo "ERROR: $CHART/Chart.yaml not found"
+            exit 1
+          }
 
-          echo "Environment: $TARGET_ENV"
-          echo "Values file: $VALUES_FILE"
-          echo "Cluster: $CLUSTER"
+          echo "DEV configuration validated."
 
-      # --------------------------------------------------
-      # 3. Validate promotion input
-      # --------------------------------------------------
-
-      - name: Validate promotion inputs
-        env:
-          IMAGE_INPUT: ${{ inputs.image_tag }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if [[ "$TARGET_ENV" != "dev" ]]; then
-            if [[ ! "$IMAGE_INPUT" =~ ^[a-fA-F0-9]{40}$ ]]; then
-              echo "Enter the full 40-character frontend image SHA."
-              exit 1
-            fi
-          fi
-
-      # --------------------------------------------------
-      # 4. Configure AWS credentials
-      # --------------------------------------------------
-
+      # 3. Configure AWS credentials using GitHub OIDC
       - name: Configure AWS credentials
-        id: configure_aws
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Verify AWS identity and EKS cluster
+      # 4. Verify AWS identity and EKS cluster
+      - name: Verify AWS and EKS
         shell: bash
         run: |
           set -euo pipefail
@@ -144,12 +80,39 @@ jobs:
             --query 'cluster.status' \
             --output text
 
-      # --------------------------------------------------
-      # 5. Connect to EKS
-      # --------------------------------------------------
+      # 5. Login to Docker Hub
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_TOKEN }}
 
+      # 6. Set up Docker Buildx
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # 7. Build and push frontend image
+      - name: Build and push DEV frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          push: true
+          tags: ${{ env.DEV_IMAGE }}:${{ github.sha }}
+
+      # 8. Verify the pushed image
+      - name: Verify frontend image
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          docker manifest inspect \
+            "$DEV_IMAGE:$GITHUB_SHA" >/dev/null
+
+          echo "Image successfully pushed:"
+          echo "$DEV_IMAGE:$GITHUB_SHA"
+
+      # 9. Connect to DEV EKS cluster
       - name: Update kubeconfig
-        id: update_kubeconfig
         shell: bash
         run: |
           set -euo pipefail
@@ -161,125 +124,8 @@ jobs:
           kubectl config current-context
           kubectl get --raw=/version
 
-      # --------------------------------------------------
-      # 6. Login to Docker Hub
-      # --------------------------------------------------
-
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_TOKEN }}
-
-      # --------------------------------------------------
-      # 7. Build and push frontend image ONLY in DEV
-      # --------------------------------------------------
-
-      - name: Set up Docker Buildx
-        if: ${{ env.TARGET_ENV == 'dev' }}
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build and push DEV frontend image
-        if: ${{ env.TARGET_ENV == 'dev' }}
-        uses: docker/build-push-action@v6
-        with:
-          context: ./frontend
-          push: true
-          tags: ${{ env.DEV_IMAGE }}:${{ github.sha }}
-
-      # --------------------------------------------------
-      # 8. Select promotion source and destination
-      # --------------------------------------------------
-
-      - name: Select frontend image repositories
-        env:
-          IMAGE_INPUT: ${{ inputs.image_tag }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          case "$TARGET_ENV" in
-            dev)
-              SOURCE_IMAGE="$DEV_IMAGE"
-              DEST_IMAGE="$DEV_IMAGE"
-              IMAGE_TAG="$GITHUB_SHA"
-              ;;
-            qa)
-              SOURCE_IMAGE="$DEV_IMAGE"
-              DEST_IMAGE="$QA_IMAGE"
-              IMAGE_TAG="$IMAGE_INPUT"
-              ;;
-            uat)
-              SOURCE_IMAGE="$QA_IMAGE"
-              DEST_IMAGE="$UAT_IMAGE"
-              IMAGE_TAG="$IMAGE_INPUT"
-              ;;
-            prod)
-              SOURCE_IMAGE="$UAT_IMAGE"
-              DEST_IMAGE="$PROD_IMAGE"
-              IMAGE_TAG="$IMAGE_INPUT"
-              ;;
-            *)
-              echo "Invalid environment"
-              exit 1
-              ;;
-          esac
-
-          echo "SOURCE_IMAGE=$SOURCE_IMAGE" >> "$GITHUB_ENV"
-          echo "DEST_IMAGE=$DEST_IMAGE" >> "$GITHUB_ENV"
-          echo "IMAGE_TAG=$IMAGE_TAG" >> "$GITHUB_ENV"
-
-          echo "Source: $SOURCE_IMAGE:$IMAGE_TAG"
-          echo "Destination: $DEST_IMAGE:$IMAGE_TAG"
-
-      # --------------------------------------------------
-      # 9. Pull source image
-      # --------------------------------------------------
-
-      - name: Pull source frontend image
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          docker pull "$SOURCE_IMAGE:$IMAGE_TAG"
-
-      # --------------------------------------------------
-      # 10. Promote image WITHOUT rebuilding
-      # --------------------------------------------------
-
-      - name: Promote frontend image
-        if: ${{ env.TARGET_ENV != 'dev' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          docker tag \
-            "$SOURCE_IMAGE:$IMAGE_TAG" \
-            "$DEST_IMAGE:$IMAGE_TAG"
-
-          docker push "$DEST_IMAGE:$IMAGE_TAG"
-
-          echo "Frontend image promoted successfully."
-
-      # --------------------------------------------------
-      # 11. Verify destination image
-      # --------------------------------------------------
-
-      - name: Verify frontend image
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          docker manifest inspect \
-            "$DEST_IMAGE:$IMAGE_TAG" >/dev/null
-
-          echo "Verified image: $DEST_IMAGE:$IMAGE_TAG"
-
-      # --------------------------------------------------
-      # 12. Create target namespace
-      # --------------------------------------------------
-
-      - name: Create target namespace
+      # 10. Create DEV namespace
+      - name: Create DEV namespace
         shell: bash
         run: |
           set -euo pipefail
@@ -287,10 +133,7 @@ jobs:
           kubectl create namespace "$NAMESPACE" \
             --dry-run=client -o yaml | kubectl apply -f -
 
-      # --------------------------------------------------
-      # 13. Configure Docker Hub pull secret
-      # --------------------------------------------------
-
+      # 11. Configure Docker Hub pull secret
       - name: Configure Docker Hub pull secret
         env:
           DH_USER: ${{ secrets.DOCKER_USERNAME }}
@@ -309,59 +152,56 @@ jobs:
             --docker-password="$DH_TOKEN" \
             --dry-run=client -o yaml | kubectl apply -f -
 
-      # --------------------------------------------------
-      # 14. Validate Helm chart
-      # --------------------------------------------------
-
+      # 12. Validate Helm chart
       - name: Validate Helm chart
         shell: bash
         run: |
           set -euo pipefail
 
-          helm lint "$CHART" -f "$VALUES_FILE"
+          helm lint "$CHART" \
+            -f "$CHART/values-dev.yaml"
 
-      # --------------------------------------------------
-      # 15. Deploy frontend
-      # Update frontend image while keeping shared
-      # backend, database, and ingress components enabled.
-      # --------------------------------------------------
-
-      - name: Deploy frontend
+      # 13. Deploy DEV application using the newly built image
+      - name: Deploy frontend to DEV
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Release: $RELEASE"
-          echo "Environment: $TARGET_ENV"
+          echo "Environment: DEV"
+          echo "Cluster: $EKS_CLUSTER_NAME"
           echo "Namespace: $NAMESPACE"
-          echo "Frontend image: $DEST_IMAGE:$IMAGE_TAG"
+          echo "Frontend image: $DEV_IMAGE:$GITHUB_SHA"
 
           helm upgrade --install "$RELEASE" "$CHART" \
             --namespace "$NAMESPACE" \
             --create-namespace \
-            -f "$VALUES_FILE" \
+            -f "$CHART/values-dev.yaml" \
             --set frontend.enabled=true \
-            --set backend.enabled=true \
-            --set database.enabled=true \
-            --set ingress.enabled=true \
-            --set configMap.enabled=false \
-            --set secret.enabled=false \
-            --set-string frontend.image.repository="$DEST_IMAGE" \
-            --set-string frontend.image.tag="$IMAGE_TAG" \
+            --set-string frontend.image.repository="$DEV_IMAGE" \
+            --set-string frontend.image.tag="$GITHUB_SHA" \
             --wait \
             --timeout 10m
 
-      # --------------------------------------------------
-      # 16. Check deployment
-      # --------------------------------------------------
-
-      - name: Check deployment
-        if: ${{ always() && steps.configure_aws.outcome == 'success' && steps.update_kubeconfig.outcome == 'success' }}
+      # 14. Verify deployment
+      - name: Verify DEV deployment
+        if: always()
         shell: bash
         run: |
-          kubectl get deployments,pods,services \
-            -n "$NAMESPACE" || true
+          echo "Deployments:"
+          kubectl get deployments -n "$NAMESPACE" || true
 
+          echo "Pods:"
+          kubectl get pods -n "$NAMESPACE" -o wide || true
+
+          echo "Frontend deployment image:"
+          kubectl get deployment \
+            -n "$NAMESPACE" \
+            -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{range .spec.template.spec.containers[*]}{.image}{" "}{end}{"\n"}{end}' \
+            || true
+
+          echo "Recent events:"
           kubectl get events \
             -n "$NAMESPACE" \
-            --sort-by=.metadata.creationTimestamp | tail -n 30 || true
+            --sort-by=.metadata.creationTimestamp \
+            | tail -n 30 || true
+```
