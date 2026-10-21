@@ -3,7 +3,8 @@ name: Backend Build and Promote
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
     paths:
       - "backend/**"
       - "dev-chart/**"
@@ -16,7 +17,11 @@ on:
         type: choice
         required: true
         default: dev
-        options: [dev, qa, uat, prod]
+        options:
+          - dev
+          - qa
+          - uat
+          - prod
 
       image_tag:
         description: "Existing image SHA for QA/UAT/PROD"
@@ -125,6 +130,7 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Verify AWS identity and EKS cluster
+        shell: bash
         run: |
           set -euo pipefail
 
@@ -142,6 +148,7 @@ jobs:
 
       - name: Update kubeconfig
         id: update_kubeconfig
+        shell: bash
         run: |
           set -euo pipefail
 
@@ -211,7 +218,7 @@ jobs:
               IMAGE_TAG="$IMAGE_INPUT"
               ;;
             *)
-              echo "Invalid environment"
+              echo "Invalid environment: $TARGET_ENV"
               exit 1
               ;;
           esac
@@ -224,10 +231,11 @@ jobs:
           echo "Destination: $DEST_IMAGE:$IMAGE_TAG"
 
       # --------------------------------------------------
-      # 9. Pull the existing source image
+      # 9. Pull source image
       # --------------------------------------------------
 
       - name: Pull source backend image
+        shell: bash
         run: |
           set -euo pipefail
 
@@ -239,6 +247,7 @@ jobs:
 
       - name: Promote backend image
         if: ${{ env.TARGET_ENV != 'dev' }}
+        shell: bash
         run: |
           set -euo pipefail
 
@@ -255,6 +264,7 @@ jobs:
       # --------------------------------------------------
 
       - name: Verify backend image
+        shell: bash
         run: |
           set -euo pipefail
 
@@ -268,6 +278,7 @@ jobs:
       # --------------------------------------------------
 
       - name: Create target namespace
+        shell: bash
         run: |
           set -euo pipefail
 
@@ -301,16 +312,33 @@ jobs:
       # --------------------------------------------------
 
       - name: Validate Helm chart
+        shell: bash
         run: |
           set -euo pipefail
 
           helm lint ./dev-chart -f "$VALUES_FILE"
 
       # --------------------------------------------------
-      # 15. Deploy backend only
+      # 15. Verify image variables
+      # --------------------------------------------------
+
+      - name: Verify backend image
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -n "$DEST_IMAGE"
+          test -n "$IMAGE_TAG"
+
+          echo "Deploying backend image:"
+          echo "${DEST_IMAGE}:${IMAGE_TAG}"
+
+      # --------------------------------------------------
+      # 16. Deploy backend only
       # --------------------------------------------------
 
       - name: Deploy backend
+        shell: bash
         run: |
           set -euo pipefail
 
@@ -330,7 +358,7 @@ jobs:
             --timeout 10m
 
       # --------------------------------------------------
-      # 16. Check deployment
+      # 17. Check deployment
       # --------------------------------------------------
 
       - name: Check deployment
