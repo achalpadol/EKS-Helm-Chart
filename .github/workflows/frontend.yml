@@ -1,4 +1,4 @@
-```yaml
+
 name: Frontend Build and Promote
 
 on:
@@ -257,4 +257,3 @@ jobs:
 
           kubectl get events -n "$NAMESPACE" \
             --sort-by=.metadata.creationTimestamp | tail -n 30 || true
-```
