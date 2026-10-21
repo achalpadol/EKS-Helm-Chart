@@ -15,7 +15,7 @@ frontend:
 
 backend:
   enabled: true
-  name: app2-backend-service
+  name: backend
   replicaCount: 1
   image:
     repository: ""
