@@ -1,4 +1,4 @@
-
+```yaml
 name: Frontend Build and Promote
 
 on:
@@ -30,11 +30,9 @@ concurrency:
   group: employee-app-${{ github.event_name == 'push' && 'dev' || inputs.environment }}-helm
   cancel-in-progress: false
 
-
 env:
   RELEASE: employee-app
   CHART: ./dev-chart
-  VALUES_FILE: ./dev-chart/values.yaml
   AWS_REGION: ap-south-1
   DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
   TARGET_ENV: ${{ github.event_name == 'push' && 'dev' || inputs.environment }}
@@ -43,6 +41,7 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+
     environment: ${{ github.event_name == 'push' && 'development' || inputs.environment == 'dev' && 'development' || inputs.environment == 'prod' && 'production' || inputs.environment }}
 
     env:
@@ -51,31 +50,37 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Select environment values file
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          case "$TARGET_ENV" in
+            dev)  VALUES_FILE="./dev-chart/values-dev.yaml" ;;
+            qa)   VALUES_FILE="./dev-chart/values-qa.yaml" ;;
+            uat)  VALUES_FILE="./dev-chart/values-uat.yaml" ;;
+            prod) VALUES_FILE="./dev-chart/values-prod.yaml" ;;
+            *) echo "Invalid environment: $TARGET_ENV"; exit 1 ;;
+          esac
+
+          test -f "$VALUES_FILE" || {
+            echo "Values file not found: $VALUES_FILE"
+            exit 1
+          }
+
+          echo "VALUES_FILE=$VALUES_FILE" >> "$GITHUB_ENV"
+          echo "Selected values file: $VALUES_FILE"
+
       - name: Define deployment variables
         shell: bash
         run: |
           set -euo pipefail
 
-          NAMESPACE="app-${TARGET_ENV}"
-          echo "NAMESPACE=$NAMESPACE" >> "$GITHUB_ENV"
-
-          echo "RELEASE=$RELEASE"
-          echo "CHART=$CHART"
-          echo "VALUES_FILE=$VALUES_FILE"
-          echo "NAMESPACE=$NAMESPACE"
-      # ADDED HERE: immediately after Checkout repository
-      - name: Define deployment variables
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          NAMESPACE="app-${TARGET_ENV}"
-          echo "NAMESPACE=$NAMESPACE" >> "$GITHUB_ENV"
-
-          echo "RELEASE=$RELEASE"
-          echo "CHART=$CHART"
-          echo "VALUES_FILE=$VALUES_FILE"
-          echo "NAMESPACE=$NAMESPACE"
+          echo "Release: $RELEASE"
+          echo "Chart: $CHART"
+          echo "Namespace: $NAMESPACE"
+          echo "Target environment: $TARGET_ENV"
 
       - name: Validate inputs
         env:
@@ -85,8 +90,8 @@ jobs:
           set -euo pipefail
 
           if [[ "$TARGET_ENV" != "dev" ]]; then
-            if [[ ! "$IMAGE_INPUT" =~ ^[a-fA-F0-9]{7,64}$ ]]; then
-              echo "Enter a valid existing DEV frontend image SHA."
+            if [[ ! "$IMAGE_INPUT" =~ ^[a-fA-F0-9]{40}$ ]]; then
+              echo "Enter the full 40-character DEV frontend image commit SHA."
               exit 1
             fi
           fi
@@ -105,19 +110,6 @@ jobs:
           esac
 
           echo "EKS_CLUSTER_NAME=$CLUSTER" >> "$GITHUB_ENV"
-          
-      - name: Define deployment variables
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          NAMESPACE="app-${TARGET_ENV}"
-          echo "NAMESPACE=$NAMESPACE" >> "$GITHUB_ENV"
-
-          echo "Release: $RELEASE"
-          echo "Chart: $CHART"
-          echo "Values file: $VALUES_FILE"
-          echo "Namespace: $NAMESPACE"
 
       - name: Configure AWS credentials
         id: configure_aws
@@ -127,20 +119,26 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Verify AWS identity and EKS cluster
+        shell: bash
         run: |
           set -euo pipefail
+
           aws sts get-caller-identity
+
           aws eks describe-cluster \
             --name "$EKS_CLUSTER_NAME" \
             --region "$AWS_REGION"
 
       - name: Update kubeconfig
         id: update_kubeconfig
+        shell: bash
         run: |
           set -euo pipefail
+
           aws eks update-kubeconfig \
             --region "$AWS_REGION" \
             --name "$EKS_CLUSTER_NAME"
+
           kubectl config current-context
           kubectl get --raw=/version
 
@@ -154,6 +152,7 @@ jobs:
         if: ${{ github.event_name == 'push' || inputs.environment == 'dev' }}
         uses: docker/setup-buildx-action@v3
 
+      # Build and push only for Dev.
       - name: Build and push frontend
         if: ${{ github.event_name == 'push' || inputs.environment == 'dev' }}
         uses: docker/build-push-action@v6
@@ -162,78 +161,100 @@ jobs:
           push: true
           tags: ${{ env.IMAGE_REPOSITORY }}:${{ github.sha }}
 
+      # Reuse the existing Dev image for QA, UAT and Prod.
       - name: Select frontend image tag
         env:
           IMAGE_INPUT: ${{ inputs.image_tag }}
+        shell: bash
         run: |
           set -euo pipefail
+
           if [[ "$TARGET_ENV" == "dev" ]]; then
-            echo "IMAGE_TAG=$GITHUB_SHA" >> "$GITHUB_ENV"
+            IMAGE_TAG="$GITHUB_SHA"
           else
-            echo "IMAGE_TAG=$IMAGE_INPUT" >> "$GITHUB_ENV"
+            IMAGE_TAG="$IMAGE_INPUT"
           fi
 
-      - name: Verify frontend image
+          echo "IMAGE_TAG=$IMAGE_TAG" >> "$GITHUB_ENV"
+          echo "Selected image: $IMAGE_REPOSITORY:$IMAGE_TAG"
+
+      - name: Verify frontend image exists
+        shell: bash
         run: |
           set -euo pipefail
+
           docker manifest inspect \
             "$IMAGE_REPOSITORY:$IMAGE_TAG" >/dev/null
-          echo "Verified frontend image."
+
+          echo "Verified frontend image: $IMAGE_REPOSITORY:$IMAGE_TAG"
 
       - name: Create target namespace
+        shell: bash
         run: |
-          kubectl create namespace "app-${TARGET_ENV}" \
+          set -euo pipefail
+
+          kubectl create namespace "$NAMESPACE" \
             --dry-run=client -o yaml | kubectl apply -f -
 
       - name: Configure Docker Hub pull secret
         env:
           DH_USER: ${{ secrets.DOCKER_USERNAME }}
           DH_TOKEN: ${{ secrets.DOCKER_TOKEN }}
+        shell: bash
         run: |
           set -euo pipefail
+
           test -n "$DH_USER"
           test -n "$DH_TOKEN"
 
           kubectl create secret docker-registry dockerhub-secret \
-            --namespace="app-${TARGET_ENV}" \
+            --namespace="$NAMESPACE" \
             --docker-server=https://index.docker.io/v1/ \
             --docker-username="$DH_USER" \
             --docker-password="$DH_TOKEN" \
             --dry-run=client -o yaml | kubectl apply -f -
 
       - name: Validate Helm chart
-        run: helm lint ./dev-chart
+        shell: bash
+        run: |
+          set -euo pipefail
+          helm lint "$CHART" -f "$VALUES_FILE"
 
-      
-      - name: Deploy frontend only
+      # Keep all components enabled in this shared Helm release.
+      # Update only the frontend image for this workflow.
+      - name: Deploy frontend
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Deploying release: ${RELEASE}"
-          echo "Namespace: ${NAMESPACE}"
-          echo "Frontend image: ${IMAGE_REPOSITORY}:${IMAGE_TAG}"
+          echo "Deploying release: $RELEASE"
+          echo "Environment: $TARGET_ENV"
+          echo "Namespace: $NAMESPACE"
+          echo "Values file: $VALUES_FILE"
+          echo "Frontend image: $IMAGE_REPOSITORY:$IMAGE_TAG"
 
-          helm upgrade --install "${RELEASE}" "${CHART}" \
-            --namespace "${NAMESPACE}" \
+          helm upgrade --install "$RELEASE" "$CHART" \
+            --namespace "$NAMESPACE" \
             --create-namespace \
-            -f "${VALUES_FILE}" \
+            -f "$VALUES_FILE" \
             --set frontend.enabled=true \
             --set backend.enabled=true \
             --set database.enabled=true \
             --set ingress.enabled=true \
             --set configMap.enabled=false \
             --set secret.enabled=false \
-            --set-string frontend.image.repository="${IMAGE_REPOSITORY}" \
-            --set-string frontend.image.tag="${IMAGE_TAG}" \
+            --set-string frontend.image.repository="$IMAGE_REPOSITORY" \
+            --set-string frontend.image.tag="$IMAGE_TAG" \
             --wait \
             --timeout 10m
 
-
       - name: Check deployment
         if: ${{ always() && steps.configure_aws.outcome == 'success' && steps.update_kubeconfig.outcome == 'success' }}
+        shell: bash
         run: |
           kubectl get deployments,pods,services \
-            -n "app-${TARGET_ENV}" || true
-          kubectl get events -n "app-${TARGET_ENV}" \
+            -n "$NAMESPACE" || true
+
+          kubectl get events -n "$NAMESPACE" \
             --sort-by=.metadata.creationTimestamp | tail -n 30 || true
+```
