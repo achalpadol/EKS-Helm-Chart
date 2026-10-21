@@ -3,8 +3,8 @@ frontend:
   name: frontend
   replicaCount: 1
   image:
-    repository: "docker.io/achalpadol/employee-frontend"
-    tag: "v2"
+    repository: ""
+    tag: ""
     pullPolicy: IfNotPresent
   service:
     enabled: true
@@ -18,8 +18,8 @@ backend:
   name: backend
   replicaCount: 1
   image:
-    repository: "docker.io/achalpadol/employee-backend"
-    tag: "v1"
+    repository: ""
+    tag: ""
     pullPolicy: IfNotPresent
   configMapName: employee-cm
   secretName: mysql-secret
@@ -35,8 +35,8 @@ database:
   name: database
   replicaCount: 1
   image:
-    repository: "mysql"
-    tag: "8.0"
+    repository: ""
+    tag: ""
     pullPolicy: IfNotPresent
   secretName: mysql-secret
   service:
