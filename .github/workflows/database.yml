@@ -148,6 +148,19 @@ jobs:
 
           kubectl config current-context
           kubectl get --raw=/version
+          
+      - name: Ensure namespace exists
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if kubectl get namespace "app-${TARGET_ENV}" >/dev/null 2>&1; then
+            echo "Namespace app-${TARGET_ENV} already exists"
+          else
+            echo "Namespace app-${TARGET_ENV} does not exist."
+            echo "Create it using an authorized cluster administrator."
+            exit 1
+          fi
 
       # --------------------------------------------------
       # 4. Login to Docker Hub
