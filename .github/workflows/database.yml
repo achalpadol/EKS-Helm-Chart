@@ -3,7 +3,8 @@ name: Database Build and Promote
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
     paths:
       - "db/**"
       - "dev-chart/**"
@@ -16,9 +17,14 @@ on:
         type: choice
         required: true
         default: dev
-        options: [dev, qa, uat, prod]
+        options:
+          - dev
+          - qa
+          - uat
+          - prod
+
       image_tag:
-        description: "Existing DEV database image SHA for QA/UAT/PROD"
+        description: "Existing image SHA to promote (required for QA/UAT/PROD)"
         type: string
         required: false
 
@@ -32,7 +38,10 @@ concurrency:
 
 env:
   AWS_REGION: ap-south-1
+
   TARGET_ENV: ${{ github.event_name == 'push' && 'dev' || inputs.environment }}
+
+  DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
 
 jobs:
   deploy:
@@ -41,11 +50,18 @@ jobs:
     environment: ${{ github.event_name == 'push' && 'development' || inputs.environment == 'dev' && 'development' || inputs.environment == 'prod' && 'production' || inputs.environment }}
 
     env:
-      IMAGE_REPOSITORY: ${{ secrets.DOCKER_USERNAME }}/employee-db
+      DEV_IMAGE: ${{ secrets.DOCKER_USERNAME }}/employee-db-dev
+      QA_IMAGE: ${{ secrets.DOCKER_USERNAME }}/employee-db-qa
+      UAT_IMAGE: ${{ secrets.DOCKER_USERNAME }}/employee-db-uat
+      PROD_IMAGE: ${{ secrets.DOCKER_USERNAME }}/employee-db-prod
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      # --------------------------------------------------
+      # 1. Select environment configuration
+      # --------------------------------------------------
 
       - name: Select environment values file
         shell: bash
@@ -53,19 +69,36 @@ jobs:
           set -euo pipefail
 
           case "$TARGET_ENV" in
-            dev)  VALUES_FILE="./dev-chart/values-dev.yaml" ;;
-            qa)   VALUES_FILE="./dev-chart/values-qa.yaml" ;;
-            uat)  VALUES_FILE="./dev-chart/values-uat.yaml" ;;
-            prod) VALUES_FILE="./dev-chart/values-prod.yaml" ;;
-            *) echo "Invalid environment"; exit 1 ;;
+            dev)
+              VALUES_FILE="./dev-chart/values-dev.yaml"
+              CLUSTER="dev-eks-cluster"
+              ;;
+            qa)
+              VALUES_FILE="./dev-chart/values-qa.yaml"
+              CLUSTER="qa-eks-cluster"
+              ;;
+            uat)
+              VALUES_FILE="./dev-chart/values-uat.yaml"
+              CLUSTER="uat-eks-cluster"
+              ;;
+            prod)
+              VALUES_FILE="./dev-chart/values-prod.yaml"
+              CLUSTER="prod-eks-cluster"
+              ;;
+            *)
+              echo "Invalid environment: $TARGET_ENV"
+              exit 1
+              ;;
           esac
 
-          test -f "$VALUES_FILE" || {
-            echo "Values file not found: $VALUES_FILE"
-            exit 1
-          }
+          test -f "$VALUES_FILE"
 
           echo "VALUES_FILE=$VALUES_FILE" >> "$GITHUB_ENV"
+          echo "EKS_CLUSTER_NAME=$CLUSTER" >> "$GITHUB_ENV"
+
+      # --------------------------------------------------
+      # 2. Validate promotion input
+      # --------------------------------------------------
 
       - name: Validate promotion inputs
         env:
@@ -76,25 +109,14 @@ jobs:
 
           if [[ "$TARGET_ENV" != "dev" ]]; then
             if [[ ! "$IMAGE_INPUT" =~ ^[a-fA-F0-9]{40}$ ]]; then
-              echo "Enter the full 40-character DEV image commit SHA."
+              echo "Provide the full 40-character Git commit SHA."
               exit 1
             fi
           fi
 
-      - name: Select EKS cluster
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          case "$TARGET_ENV" in
-            dev)  CLUSTER="dev-eks-cluster" ;;
-            qa)   CLUSTER="qa-eks-cluster" ;;
-            uat)  CLUSTER="uat-eks-cluster" ;;
-            prod) CLUSTER="prod-eks-cluster" ;;
-            *) echo "Invalid environment"; exit 1 ;;
-          esac
-
-          echo "EKS_CLUSTER_NAME=$CLUSTER" >> "$GITHUB_ENV"
+      # --------------------------------------------------
+      # 3. Configure AWS and connect to EKS
+      # --------------------------------------------------
 
       - name: Configure AWS credentials
         id: configure_aws
@@ -111,7 +133,9 @@ jobs:
 
           aws eks describe-cluster \
             --name "$EKS_CLUSTER_NAME" \
-            --region "$AWS_REGION"
+            --region "$AWS_REGION" \
+            --query 'cluster.status' \
+            --output text
 
       - name: Update kubeconfig
         id: update_kubeconfig
@@ -125,50 +149,114 @@ jobs:
           kubectl config current-context
           kubectl get --raw=/version
 
+      # --------------------------------------------------
+      # 4. Login to Docker Hub
+      # --------------------------------------------------
+
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_TOKEN }}
 
+      # --------------------------------------------------
+      # 5. BUILD ONLY IN DEV
+      # --------------------------------------------------
+
       - name: Set up Docker Buildx
-        if: ${{ github.event_name == 'push' || inputs.environment == 'dev' }}
+        if: ${{ env.TARGET_ENV == 'dev' }}
         uses: docker/setup-buildx-action@v3
 
-      # Build and push only for Dev.
-      - name: Build and push database image
-        if: ${{ github.event_name == 'push' || inputs.environment == 'dev' }}
+      - name: Build and push DEV database image
+        if: ${{ env.TARGET_ENV == 'dev' }}
         uses: docker/build-push-action@v6
         with:
           context: ./db
           push: true
-          tags: ${{ env.IMAGE_REPOSITORY }}:${{ github.sha }}
+          tags: ${{ env.DEV_IMAGE }}:${{ github.sha }}
 
-      # QA, UAT and Prod reuse the existing Dev image SHA.
-      - name: Select database image tag
+      # --------------------------------------------------
+      # 6. Select source and destination repositories
+      # --------------------------------------------------
+
+      - name: Select promotion repositories
         env:
           IMAGE_INPUT: ${{ inputs.image_tag }}
         shell: bash
         run: |
           set -euo pipefail
 
-          if [[ "$TARGET_ENV" == "dev" ]]; then
-            IMAGE_TAG="$GITHUB_SHA"
-          else
-            IMAGE_TAG="$IMAGE_INPUT"
-          fi
+          case "$TARGET_ENV" in
+            dev)
+              SOURCE_IMAGE="$DEV_IMAGE"
+              DEST_IMAGE="$DEV_IMAGE"
+              IMAGE_TAG="$GITHUB_SHA"
+              ;;
+            qa)
+              SOURCE_IMAGE="$DEV_IMAGE"
+              DEST_IMAGE="$QA_IMAGE"
+              IMAGE_TAG="$IMAGE_INPUT"
+              ;;
+            uat)
+              SOURCE_IMAGE="$QA_IMAGE"
+              DEST_IMAGE="$UAT_IMAGE"
+              IMAGE_TAG="$IMAGE_INPUT"
+              ;;
+            prod)
+              SOURCE_IMAGE="$UAT_IMAGE"
+              DEST_IMAGE="$PROD_IMAGE"
+              IMAGE_TAG="$IMAGE_INPUT"
+              ;;
+            *)
+              echo "Invalid environment"
+              exit 1
+              ;;
+          esac
 
+          echo "SOURCE_IMAGE=$SOURCE_IMAGE" >> "$GITHUB_ENV"
+          echo "DEST_IMAGE=$DEST_IMAGE" >> "$GITHUB_ENV"
           echo "IMAGE_TAG=$IMAGE_TAG" >> "$GITHUB_ENV"
-          echo "Selected image: $IMAGE_REPOSITORY:$IMAGE_TAG"
 
-      - name: Verify database image exists
+          echo "Source:      $SOURCE_IMAGE:$IMAGE_TAG"
+          echo "Destination: $DEST_IMAGE:$IMAGE_TAG"
+
+      # --------------------------------------------------
+      # 7. Promote without rebuilding
+      # --------------------------------------------------
+
+      - name: Pull source database image
+        run: |
+          set -euo pipefail
+
+          docker pull "$SOURCE_IMAGE:$IMAGE_TAG"
+
+      - name: Promote database image
+        if: ${{ env.TARGET_ENV != 'dev' }}
+        run: |
+          set -euo pipefail
+
+          docker tag \
+            "$SOURCE_IMAGE:$IMAGE_TAG" \
+            "$DEST_IMAGE:$IMAGE_TAG"
+
+          docker push "$DEST_IMAGE:$IMAGE_TAG"
+
+      # --------------------------------------------------
+      # 8. Verify destination image exists
+      # --------------------------------------------------
+
+      - name: Verify database image
         run: |
           set -euo pipefail
 
           docker manifest inspect \
-            "$IMAGE_REPOSITORY:$IMAGE_TAG" >/dev/null
+            "$DEST_IMAGE:$IMAGE_TAG" >/dev/null
 
-          echo "Verified image: $IMAGE_REPOSITORY:$IMAGE_TAG"
+          echo "Verified image: $DEST_IMAGE:$IMAGE_TAG"
+
+      # --------------------------------------------------
+      # 9. Create Kubernetes namespace
+      # --------------------------------------------------
 
       - name: Create target namespace
         run: |
@@ -176,6 +264,10 @@ jobs:
 
           kubectl create namespace "app-${TARGET_ENV}" \
             --dry-run=client -o yaml | kubectl apply -f -
+
+      # --------------------------------------------------
+      # 10. Configure Docker Hub pull secret
+      # --------------------------------------------------
 
       - name: Configure Docker Hub pull secret
         env:
@@ -194,12 +286,21 @@ jobs:
             --docker-password="$DH_TOKEN" \
             --dry-run=client -o yaml | kubectl apply -f -
 
+      # --------------------------------------------------
+      # 11. Validate Helm chart
+      # --------------------------------------------------
+
       - name: Validate Helm chart
         run: |
           set -euo pipefail
+
           helm lint ./dev-chart -f "$VALUES_FILE"
 
-      - name: Deploy database only
+      # --------------------------------------------------
+      # 12. Deploy database only
+      # --------------------------------------------------
+
+      - name: Deploy database
         run: |
           set -euo pipefail
 
@@ -213,10 +314,14 @@ jobs:
             --set configMap.enabled=false \
             --set secret.enabled=true \
             --set ingress.enabled=false \
-            --set-string database.image.repository="$IMAGE_REPOSITORY" \
+            --set-string database.image.repository="$DEST_IMAGE" \
             --set-string database.image.tag="$IMAGE_TAG" \
             --wait \
             --timeout 10m
+
+      # --------------------------------------------------
+      # 13. Check deployment
+      # --------------------------------------------------
 
       - name: Check deployment
         if: ${{ always() && steps.configure_aws.outcome == 'success' && steps.update_kubeconfig.outcome == 'success' }}
@@ -225,5 +330,6 @@ jobs:
           kubectl get deployments,pods,services \
             -n "app-${TARGET_ENV}" || true
 
-          kubectl get events -n "app-${TARGET_ENV}" \
+          kubectl get events \
+            -n "app-${TARGET_ENV}" \
             --sort-by=.metadata.creationTimestamp | tail -n 30 || true
