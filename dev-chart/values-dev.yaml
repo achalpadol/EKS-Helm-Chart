@@ -4,7 +4,7 @@ frontend:
   replicaCount: 1
   image:
     repository: "achalpadol/employee-frontend-dev"
-    tag: ""
+    tag: "2d39f1e1fee98a3e967a4ee7e9d93541af6f24b7"
     pullPolicy: IfNotPresent
   service:
     enabled: true
@@ -19,7 +19,7 @@ backend:
   replicaCount: 1
   image:
     repository: "achalpadol/employee-backend-dev"
-    tag: ""
+    tag: "4a1810eda28124bb611705b2408117f15a85b202"
     pullPolicy: IfNotPresent
   configMapName: employee-cm
   secretName: mysql-secret
