@@ -166,7 +166,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
+          IMAGE="$DEV_IMAGE:$GITHUB_SHA"
           echo "Environment: DEV"
           echo "Cluster: $EKS_CLUSTER_NAME"
           echo "Namespace: $NAMESPACE"
