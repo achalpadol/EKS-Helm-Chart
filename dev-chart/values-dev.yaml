@@ -3,7 +3,7 @@ frontend:
   name: frontend
   replicaCount: 1
   image:
-    repository: ""
+    repository: "achalpadol/employee-frontend-dev"
     tag: ""
     pullPolicy: IfNotPresent
   service:
@@ -18,7 +18,7 @@ backend:
   name: backend
   replicaCount: 1
   image:
-    repository: ""
+    repository: "achalpadol/employee-backend-dev"
     tag: ""
     pullPolicy: IfNotPresent
   configMapName: employee-cm
@@ -35,8 +35,8 @@ database:
   name: database
   replicaCount: 1
   image:
-    repository: ""
-    tag: ""
+    repository: "mysql"
+    tag: "8.0"
     pullPolicy: IfNotPresent
   secretName: mysql-secret
   service:
