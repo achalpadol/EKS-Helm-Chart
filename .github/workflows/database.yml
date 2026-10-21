@@ -316,10 +316,8 @@ jobs:
       - name: Deploy database
         run: |
           set -euo pipefail
-
           helm upgrade --install employee-app ./dev-chart \
             --namespace "app-${TARGET_ENV}" \
-            --create-namespace \
             -f "$VALUES_FILE" \
             --set frontend.enabled=false \
             --set backend.enabled=false \
