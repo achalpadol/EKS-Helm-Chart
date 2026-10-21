@@ -32,7 +32,7 @@ concurrency:
 
 
 env:
-  RELEASE: employee-backend
+  RELEASE: employee-app
   CHART: ./dev-chart
   VALUES_FILE: ./dev-chart/values.yaml
   AWS_REGION: ap-south-1
