@@ -25,7 +25,7 @@ backend:
   secretName: mysql-secret
   service:
     enabled: true
-    name: app2-backend-service
+    name: backend
     type: ClusterIP
     port: 5000
     targetPort: 5000
